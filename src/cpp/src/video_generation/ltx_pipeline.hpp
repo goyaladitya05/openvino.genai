@@ -499,6 +499,8 @@ public:
         const auto& transformer_config = m_transformer->get_config();
         check_inputs(merged_generation_config, vae_scale_factor);
 
+        m_transformer->set_adapters(merged_generation_config.adapters);
+
         // use callback if defined
         std::shared_ptr<ThreadedCallbackWrapper> callback_ptr = nullptr;
         auto callback_iter = properties.find(ov::genai::callback.name());

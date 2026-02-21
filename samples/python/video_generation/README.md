@@ -68,6 +68,25 @@ pip install --upgrade-strategy eager -r ../../deployment-requirements.txt
   python text2video.py ./ltx_video_ov/INT8 "A woman with long brown hair and light skin smiles at another woman with long blonde hair"
   ```
 
+### LoRA Text to Video Sample (`lora_text2video.py`)
+
+- **Description:**
+  Video generation with LoRA adapters using a text-to-video model. This sample demonstrates how to generate videos from text prompts while applying a LoRA adapter.
+
+  Recommended models: Lightricks/LTX-Video
+
+- **Main Feature:** Apply a LoRA adapter to a text-to-video pipeline for customized generation.
+
+- **Run Command:**
+  ```bash
+  python lora_text2video.py model_dir prompt lora_adapter_path
+  ```
+
+  Example:
+  ```bash
+  python lora_text2video.py ./ltx_video_ov/INT8 "A woman with long brown hair and light skin smiles at another woman with long blonde hair" adapter.safetensors
+  ```
+
 The sample will generate a video file `genai_video.avi` in the current directory.
 
 Users can modify the source code to experiment with different generation parameters:
