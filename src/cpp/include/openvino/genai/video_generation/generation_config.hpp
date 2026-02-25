@@ -7,7 +7,7 @@
 #include <optional>
 
 #include "openvino/genai/image_generation/generation_config.hpp"
-
+#include "openvino/genai/lora_adapter.hpp"
 
 namespace ov::genai {
 /**

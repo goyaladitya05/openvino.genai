@@ -30,7 +30,9 @@ def save_video(filename: str, video_tensor, fps: int = 25):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate video from text prompt using OpenVINO GenAI with LoRA adapters")
+    parser = argparse.ArgumentParser(
+        description="Generate video from text prompt using OpenVINO GenAI with LoRA adapters"
+    )
     parser.add_argument("model_dir", help="Path to the model directory")
     parser.add_argument("prompt", help="Text prompt for video generation")
     parser.add_argument("lora_adapter", help="Path to the LoRA adapter file (.safetensors)")

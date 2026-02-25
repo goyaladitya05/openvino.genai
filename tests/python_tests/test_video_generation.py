@@ -290,7 +290,9 @@ class TestLoRAVideoGeneration:
         adapter_config = ov_genai.AdapterConfig()
         pipe = ov_genai.Text2VideoPipeline(video_generation_model, "CPU", adapters=adapter_config)
 
-        result = pipe.generate("test prompt", height=32, width=32, num_frames=9, num_inference_steps=2, adapters=adapter_config)
+        result = pipe.generate(
+            "test prompt", height=32, width=32, num_frames=9, num_inference_steps=2, adapters=adapter_config
+        )
         assert result is not None
         assert result.video is not None
 
