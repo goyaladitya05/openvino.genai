@@ -2011,9 +2011,8 @@ class LTXVideoTransformer3DModel:
         """
     def set_adapters(self, adapters: openvino_genai.py_openvino_genai.AdapterConfig | None) -> None:
         """
-        Sets LoRA adapters for the model.
-        adapters (AdapterConfig or None): Adapter configuration to apply, or None
-        to disable adapters.
+                        Sets LoRA adapters for the model.
+                        adapters (AdapterConfig or None): Adapter configuration to apply, or None to disable adapters.
         """
     def set_hidden_states(self, tensor_name: str, encoder_hidden_states: openvino._pyopenvino.Tensor) -> None:
         """
