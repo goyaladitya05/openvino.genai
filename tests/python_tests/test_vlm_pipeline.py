@@ -219,7 +219,7 @@ def _get_ov_model(model_id: str) -> str:
         )
 
     ov_cache_converted_dir = get_ov_cache_converted_models_dir()
-    dir_name = str(model_id).replace(os.sep, "_")
+    dir_name = str(model_id).replace("/", "_").replace("\\", "_")
     model_dir = ov_cache_converted_dir / dir_name
 
     manager = AtomicDownloadManager(model_dir)
