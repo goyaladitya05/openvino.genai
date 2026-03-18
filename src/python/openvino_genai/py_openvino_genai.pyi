@@ -2010,11 +2010,6 @@ class LTXVideoTransformer3DModel:
                         width (int): Video width.
                         tokenizer_model_max_length (int): Maximum sequence length for tokenizer.
         """
-    def set_adapters(self, adapters: openvino_genai.py_openvino_genai.AdapterConfig | None) -> None:
-        """
-                        Sets LoRA adapters for the transformer model.
-                        adapters (AdapterConfig or None): Adapter configuration to apply.
-        """
     def set_hidden_states(self, tensor_name: str, encoder_hidden_states: openvino._pyopenvino.Tensor) -> None:
         """
                         Sets encoder hidden states tensor.
@@ -4305,7 +4300,6 @@ class VLMRawPerfMetrics:
     def prepare_embeddings_durations(self) -> list[float]:
         ...
 class VideoGenerationConfig:
-    adapters: openvino_genai.py_openvino_genai.AdapterConfig | None
     generator: Generator
     negative_prompt: str | None
     taylorseer_config: openvino_genai.py_openvino_genai.TaylorSeerCacheConfig | None
