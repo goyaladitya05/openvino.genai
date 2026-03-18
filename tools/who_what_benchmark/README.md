@@ -149,6 +149,20 @@ wwb --target-model ltx-video-model --gt-data video_gen_test/gt.csv --model-type 
 wwb --target-model ltx-video-model --gt-data video_gen_test/gt.csv --model-type text-to-video --genai --output ltx_video_genai
 ```
 
+### Compare Text-to-video models with LoRA
+```sh
+# Export FP32 model to OpenVINO
+optimum-cli export openvino -m Lightricks/LTX-Video --weight-format fp32 ltx-video-model
+
+# Collect the references using the HF pipeline with a LoRA adapter applied.
+# Reference videos will be stored in the "reference" subfolder under the same path with .csv.
+wwb --base-model Lightricks/LTX-Video --gt-data ltx_lora_test/gt.csv --model-type text-to-video --adapters path/to/lora.safetensors --alphas 1.0 --hf
+
+# Compute the metric using the OpenVINO GenAI pipeline with the same LoRA adapter.
+# Target videos will be stored in the "target" subfolder under the same path with .csv.
+wwb --target-model ltx-video-model --gt-data ltx_lora_test/gt.csv --model-type text-to-video --adapters path/to/lora.safetensors --alphas 1.0 --genai --output ltx_lora_genai
+```
+
 ### API
 The API provides a way to access to investigate the worst generated text examples.
 
