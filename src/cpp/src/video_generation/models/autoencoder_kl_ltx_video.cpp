@@ -29,41 +29,35 @@ namespace {
 
 class DiagonalGaussianDistribution {
 public:
-    explicit DiagonalGaussianDistribution(ov::Tensor parameters) {
-        OPENVINO_ASSERT(parameters.get_element_type() == ov::element::f32,
+    explicit DiagonalGaussianDistribution(ov::Tensor parameters) : m_params(std::move(parameters)) {
+        OPENVINO_ASSERT(m_params.get_element_type() == ov::element::f32,
             "DiagonalGaussianDistribution requires f32 encoder output, got ",
-            parameters.get_element_type());
+            m_params.get_element_type());
 
-        const ov::Shape& full_shape = parameters.get_shape();
+        const ov::Shape& full_shape = m_params.get_shape();
         OPENVINO_ASSERT(full_shape.size() >= 2, "Parameters tensor rank must be at least 2");
         OPENVINO_ASSERT(full_shape[1] % 2 == 0, "Channel dimension must be even to split mean and logvar");
 
-        const size_t batch = full_shape[0];
-        const size_t channels = full_shape[1] / 2;
-
-        ov::Shape reduced_shape = full_shape;
-        reduced_shape[1] = channels;
-
-        m_mean = ov::Tensor(parameters.get_element_type(), reduced_shape);
-        m_std  = ov::Tensor(parameters.get_element_type(), reduced_shape);
-
-        size_t spatial = 1;
+        m_channels = full_shape[1] / 2;
+        m_spatial = 1;
         for (size_t i = 2; i < full_shape.size(); ++i)
-            spatial *= full_shape[i];
+            m_spatial *= full_shape[i];
 
-        const float* src = parameters.data<float>();
-        float* mean_data = m_mean.data<float>();
-        float* std_data  = m_std.data<float>();
+        ov::Shape std_shape = full_shape;
+        std_shape[1] = m_channels;
+        m_std = ov::Tensor(m_params.get_element_type(), std_shape);
+
+        const float* src = m_params.data<float>();
+        float* std_data = m_std.data<float>();
+        const size_t batch = full_shape[0];
 
         for (size_t b = 0; b < batch; ++b) {
-            for (size_t c = 0; c < channels; ++c) {
-                const size_t dst_off  = (b * channels + c) * spatial;
-                const size_t mean_off = (b * full_shape[1] + c) * spatial;
-                const size_t lvar_off = (b * full_shape[1] + channels + c) * spatial;
-                for (size_t s = 0; s < spatial; ++s) {
-                    mean_data[dst_off + s] = src[mean_off + s];
+            for (size_t c = 0; c < m_channels; ++c) {
+                const size_t lvar_off = (b * full_shape[1] + m_channels + c) * m_spatial;
+                const size_t dst_off  = (b * m_channels + c) * m_spatial;
+                for (size_t s = 0; s < m_spatial; ++s) {
                     const float logvar = std::min(std::max(src[lvar_off + s], -30.0f), 20.0f);
-                    std_data[dst_off + s]  = std::exp(0.5f * logvar);
+                    std_data[dst_off + s] = std::exp(0.5f * logvar);
                 }
             }
         }
@@ -72,24 +66,35 @@ public:
     ov::Tensor sample(std::shared_ptr<ov::genai::Generator> generator) const {
         OPENVINO_ASSERT(generator, "Generator must not be nullptr");
 
-        ov::Tensor rand_tensor = generator->randn_tensor(m_mean.get_shape());
-        OPENVINO_ASSERT(rand_tensor.get_element_type() == ov::element::f32,
+        ov::Shape sample_shape = m_params.get_shape();
+        sample_shape[1] = m_channels;
+        ov::Tensor result = generator->randn_tensor(sample_shape);
+        OPENVINO_ASSERT(result.get_element_type() == ov::element::f32,
             "Generator::randn_tensor() must return an f32 tensor, got ",
-            rand_tensor.get_element_type());
+            result.get_element_type());
 
-        float* rand_tensor_data = rand_tensor.data<float>();
-        const float* mean_data = m_mean.data<float>();
+        const float* params_data = m_params.data<float>();
         const float* std_data = m_std.data<float>();
+        float* result_data = result.data<float>();
+        const size_t batch = m_params.get_shape()[0];
+        const size_t full_channels = m_params.get_shape()[1];
 
-        for (size_t i = 0; i < rand_tensor.get_size(); ++i) {
-            rand_tensor_data[i] = mean_data[i] + std_data[i] * rand_tensor_data[i];
+        for (size_t b = 0; b < batch; ++b) {
+            for (size_t c = 0; c < m_channels; ++c) {
+                const size_t mean_off = (b * full_channels + c) * m_spatial;
+                const size_t dst_off  = (b * m_channels + c) * m_spatial;
+                for (size_t s = 0; s < m_spatial; ++s) {
+                    result_data[dst_off + s] = params_data[mean_off + s] + std_data[dst_off + s] * result_data[dst_off + s];
+                }
+            }
         }
 
-        return rand_tensor;
+        return result;
     }
 
 private:
-    ov::Tensor m_mean, m_std;
+    ov::Tensor m_params, m_std;
+    size_t m_channels, m_spatial;
 };
 
 // for BW compatibility with 2024.6.0
