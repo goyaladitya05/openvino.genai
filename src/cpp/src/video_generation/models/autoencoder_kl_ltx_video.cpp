@@ -314,7 +314,7 @@ const AutoencoderKLLTXVideo::Config& AutoencoderKLLTXVideo::get_config() const {
     return m_config;
 }
 
-size_t AutoencoderKLLTXVideo::get_vae_scale_factor() const {
+size_t AutoencoderKLLTXVideo::get_vae_scale_factor() const {  // TODO: compare with reference. Drop?
     return std::pow(2, m_config.block_out_channels.size() - 1);
 }
 
