@@ -29,7 +29,7 @@ classifiers = [
     "Programming Language :: Python :: Implementation :: CPython"
 ]
 dependencies = [
-    "openvino_tokenizers~=2026.2.0.0.dev"
+    "openvino_tokenizers~=2026.3.0.0.dev20260516"
 ]
 [project.optional-dependencies]
 testing = ["pytest>=6.0"]
