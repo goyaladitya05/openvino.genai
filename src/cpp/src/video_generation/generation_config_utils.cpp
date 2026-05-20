@@ -33,6 +33,7 @@ void update_generation_config(VideoGenerationConfig& config, const ov::AnyMap& p
     read_anymap_param(properties, "taylorseer_config", config.taylorseer_config);
 
     read_anymap_param(properties, "adapters", config.adapters);
+    read_anymap_param(properties, "strength", config.strength);
 
     // 'generator' has higher priority than 'seed' parameter
     const bool have_generator_param =

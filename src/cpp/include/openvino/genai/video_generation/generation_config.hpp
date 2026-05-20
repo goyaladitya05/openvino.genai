@@ -66,6 +66,13 @@ struct VideoGenerationConfig {
 
     /// LoRA adapters applied during generation.
     std::optional<AdapterConfig> adapters = std::nullopt;
+
+    /**
+     * Strength of noise applied to the conditioning image in image-to-video generation.
+     * 1.0 = full denoising from maximum noise; 0.0 = no denoising (return conditioning frames directly).
+     * Ignored in text-to-video generation.
+     */
+    float strength = 1.0f;
 };
 
 /**
