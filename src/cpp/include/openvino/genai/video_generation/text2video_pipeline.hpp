@@ -150,6 +150,27 @@ public:
 
     VideoGenerationResult generate(const std::string& positive_prompt, const ov::AnyMap& properties = {});
 
+    /**
+     * Generates video(s) conditioned on an input image (image-to-video).
+     * Frame 0 of the output is anchored to the encoded conditioning image; subsequent frames are generated via denoising.
+     * Requires a VAE encoder to be present in the model directory ('vae_encoder' subdirectory).
+     * @param image Conditioning image as a uint8 tensor of shape [H, W, 3] or [1, H, W, 3] in NHWC layout.
+     *              Will be resized to (height, width) specified in generation config.
+     * @param positive_prompt Prompt to guide video generation
+     * @param properties Generation parameters. 'strength' controls denoising amount: 1.0 = full denoising, 0.0 = no denoising.
+     * @returns VideoGenerationResult with video tensor shaped as [num_videos_per_prompt, num_frames, height, width, 3]
+     */
+    VideoGenerationResult generate(const ov::Tensor& image, const std::string& positive_prompt, const ov::AnyMap& properties = {});
+
+    template <typename... Properties>
+    ov::util::EnableIfAllStringAny<VideoGenerationResult, Properties...> generate(
+        const ov::Tensor& image,
+        const std::string& positive_prompt,
+        Properties&&... properties
+    ) {
+        return generate(image, positive_prompt, ov::AnyMap{std::forward<Properties>(properties)...});
+    }
+
     template <typename... Properties>
     ov::util::EnableIfAllStringAny<VideoGenerationResult, Properties...> generate(
         const std::string& positive_prompt,
