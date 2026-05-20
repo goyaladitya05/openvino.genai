@@ -296,6 +296,8 @@ class Text2VideoPipeline::LTXPipeline {
     VideoGenerationPerfMetrics m_perf_metrics;
     Ms m_load_time;
 
+    bool m_has_encoder = false;
+
     size_t m_latent_num_frames = 0;
     size_t m_latent_height = 0;
     size_t m_latent_width = 0;
@@ -404,6 +406,25 @@ class Text2VideoPipeline::LTXPipeline {
         m_transformer->set_hidden_states("width", make_scalar_tensor(m_latent_width));
     }
 
+    static std::pair<std::shared_ptr<AutoencoderKLLTXVideo>, bool> load_vae(const std::filesystem::path& models_dir) {
+        const auto encoder_path = models_dir / "vae_encoder";
+        if (std::filesystem::exists(encoder_path)) {
+            return {std::make_shared<AutoencoderKLLTXVideo>(encoder_path, models_dir / "vae_decoder"), true};
+        }
+        return {std::make_shared<AutoencoderKLLTXVideo>(models_dir / "vae_decoder"), false};
+    }
+
+    static std::pair<std::shared_ptr<AutoencoderKLLTXVideo>, bool> load_vae(
+            const std::filesystem::path& models_dir,
+            const std::string& device,
+            const ov::AnyMap& properties) {
+        const auto encoder_path = models_dir / "vae_encoder";
+        if (std::filesystem::exists(encoder_path)) {
+            return {std::make_shared<AutoencoderKLLTXVideo>(encoder_path, models_dir / "vae_decoder", device, properties), true};
+        }
+        return {std::make_shared<AutoencoderKLLTXVideo>(models_dir / "vae_decoder", device, properties), false};
+    }
+
 public:
     VideoGenerationConfig m_generation_config;
 
@@ -430,7 +451,7 @@ public:
 
         const std::string vae = data["vae"][1].get<std::string>();
         if (vae == "AutoencoderKLLTXVideo") {
-            m_vae = std::make_shared<AutoencoderKLLTXVideo>(root_dir / "vae_decoder");
+            std::tie(m_vae, m_has_encoder) = load_vae(root_dir);
         } else {
             OPENVINO_THROW("Unsupported '", vae, "' VAE decoder type");
         }
@@ -454,8 +475,8 @@ public:
         : m_scheduler{cast_scheduler(Scheduler::from_config(models_dir / "scheduler/scheduler_config.json"))},
           m_t5_text_encoder{std::make_shared<T5EncoderModel>(models_dir / "text_encoder", device, properties)},
           m_transformer{std::make_shared<LTXVideoTransformer3DModel>(models_dir / "transformer", device, properties)},
-          m_vae{std::make_shared<AutoencoderKLLTXVideo>(models_dir / "vae_decoder", device, properties)},
           m_generation_config{LTX_VIDEO_DEFAULT_CONFIG} {
+        std::tie(m_vae, m_has_encoder) = load_vae(models_dir, device, properties);
         m_models_dir = models_dir;
         m_text_encode_device = device;
         m_denoise_device = device;
@@ -477,7 +498,7 @@ public:
     void rebuild_models() {
         m_t5_text_encoder = std::make_shared<T5EncoderModel>(m_models_dir / "text_encoder");
         m_transformer = std::make_shared<LTXVideoTransformer3DModel>(m_models_dir / "transformer");
-        m_vae = std::make_shared<AutoencoderKLLTXVideo>(m_models_dir / "vae_decoder");
+        std::tie(m_vae, m_has_encoder) = load_vae(m_models_dir);
     }
 
     void reshape_models(const VideoGenerationConfig& generation_config, size_t batch_size_multiplier) {
