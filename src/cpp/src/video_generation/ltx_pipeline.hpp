@@ -18,6 +18,7 @@
 #include "openvino/op/multiply.hpp"
 
 #include "image_generation/numpy_utils.hpp"
+#include "image_generation/image_processor.hpp"
 #include "image_generation/schedulers/ischeduler.hpp"
 #include "image_generation/threaded_callback.hpp"
 #include "diffusion_caching/taylorseer_lite.hpp"
@@ -404,6 +405,101 @@ class Text2VideoPipeline::LTXPipeline {
         m_transformer->set_hidden_states("num_frames", make_scalar_tensor(m_latent_num_frames));
         m_transformer->set_hidden_states("height", make_scalar_tensor(m_latent_height));
         m_transformer->set_hidden_states("width", make_scalar_tensor(m_latent_width));
+    }
+
+    std::shared_ptr<ImageResizer> m_image_resizer;
+    std::shared_ptr<ImageProcessor> m_image_processor;
+
+    void init_image_processors() {
+        if (m_image_resizer) {
+            return;
+        }
+        const std::string device = m_vae_device.empty() ? "CPU" : m_vae_device;
+        m_image_resizer = std::make_shared<ImageResizer>(
+            device, ov::element::u8, "NHWC", ov::op::v11::Interpolate::InterpolateMode::BICUBIC_PILLOW);
+        m_image_processor = std::make_shared<ImageProcessor>(device, true, false, false);
+    }
+
+    ov::Tensor preprocess_conditioning_image(const ov::Tensor& image, int64_t height, int64_t width) {
+        ov::Tensor img;
+        const ov::Shape& raw_shape = image.get_shape();
+        if (raw_shape.size() == 3) {
+            // [H, W, 3] → [1, H, W, 3]
+            img = ov::Tensor(image.get_element_type(), {1, raw_shape[0], raw_shape[1], raw_shape[2]});
+            image.copy_to(img);
+        } else {
+            img = image;
+        }
+        OPENVINO_ASSERT(img.get_shape().size() == 4 && img.get_element_type() == ov::element::u8,
+            "Conditioning image must be uint8 with shape [H, W, 3] or [1, H, W, 3] (NHWC)");
+
+        img = m_image_resizer->execute(img, height, width);  // [1, H, W, 3] u8
+        img = m_image_processor->execute(img);               // [1, 3, H, W] f32 in [-1, 1]
+
+        // Add frame dimension for VAE encoder input [B, C, F, H, W]
+        const ov::Shape& s = img.get_shape();
+        img.set_shape({s[0], s[1], 1, s[2], s[3]});
+        return img;
+    }
+
+    ov::Tensor prepare_latents_i2v(const VideoGenerationConfig& config,
+                                   size_t num_channels_latents,
+                                   size_t sp_patch,
+                                   size_t tp_patch,
+                                   const ov::Tensor& image_latent) {
+        // image_latent: [B, C, 1, H_lat, W_lat] already normalized by encode()
+        ov::Shape shape{config.num_videos_per_prompt,
+                        num_channels_latents,
+                        m_latent_num_frames,
+                        m_latent_height,
+                        m_latent_width};
+        ov::Tensor latents = config.generator->randn_tensor(shape);
+
+        // Mechanism A: frame 0 = image latent, frames 1..F-1 = noise
+        const size_t B = config.num_videos_per_prompt;
+        const size_t C = num_channels_latents;
+        const size_t F = m_latent_num_frames;
+        const size_t HW = m_latent_height * m_latent_width;
+
+        float* lat_data = latents.data<float>();
+        const float* img_data = image_latent.data<const float>();
+
+        for (size_t b = 0; b < B; ++b) {
+            for (size_t c = 0; c < C; ++c) {
+                // latents[b, c, 0, :, :] starts at (b*C*F + c*F) * HW
+                float* dst = lat_data + (b * C * F + c * F) * HW;
+                // image_latent[b, c, 0, :, :] starts at (b*C + c) * HW
+                const float* src = img_data + (b * C + c) * HW;
+                std::memcpy(dst, src, HW * sizeof(float));
+            }
+        }
+
+        return pack_latents(latents, sp_patch, tp_patch);
+    }
+
+    // Returns packed image_latent frame 0 tokens: [B, H_lat*W_lat, C].
+    // Used for Mechanism C re-lock after every scheduler step.
+    static ov::Tensor pack_image_frame0(const ov::Tensor& image_latent, size_t sp_patch, size_t tp_patch) {
+        ov::Tensor copy(image_latent.get_element_type(), image_latent.get_shape());
+        image_latent.copy_to(copy);
+        return pack_latents(copy, sp_patch, tp_patch);
+    }
+
+    // Mechanism C: overwrite frame-0 tokens in packed [B, S, D] latent with pre-packed image tokens.
+    static void relock_frame0(ov::Tensor& packed_latent, const ov::Tensor& packed_frame0) {
+        const ov::Shape& lat_shape = packed_latent.get_shape();
+        const ov::Shape& f0_shape = packed_frame0.get_shape();
+        const size_t B = lat_shape[0];
+        const size_t S = lat_shape[1];
+        const size_t D = lat_shape[2];
+        const size_t T0 = f0_shape[1];  // H_lat * W_lat
+
+        float* lat_data = packed_latent.data<float>();
+        const float* f0_data = packed_frame0.data<const float>();
+
+        for (size_t b = 0; b < B; ++b) {
+            std::memcpy(lat_data + b * S * D, f0_data + b * T0 * D, T0 * D * sizeof(float));
+        }
     }
 
     static std::pair<std::shared_ptr<AutoencoderKLLTXVideo>, bool> load_vae(const std::filesystem::path& models_dir) {
