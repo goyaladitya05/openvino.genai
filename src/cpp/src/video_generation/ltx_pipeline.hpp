@@ -414,10 +414,10 @@ class Text2VideoPipeline::LTXPipeline {
         if (m_image_resizer) {
             return;
         }
-        const std::string device = m_vae_device.empty() ? "CPU" : m_vae_device;
+        // TODO: support device-specific preprocessing (currently always on CPU like other image pipelines)
         m_image_resizer = std::make_shared<ImageResizer>(
-            device, ov::element::u8, "NHWC", ov::op::v11::Interpolate::InterpolateMode::BICUBIC_PILLOW);
-        m_image_processor = std::make_shared<ImageProcessor>(device, true, false, false);
+            "CPU", ov::element::u8, "NHWC", ov::op::v11::Interpolate::InterpolateMode::BICUBIC_PILLOW);
+        m_image_processor = std::make_shared<ImageProcessor>("CPU", true, false, false);
     }
 
     ov::Tensor preprocess_conditioning_image(const ov::Tensor& image, int64_t height, int64_t width) {
