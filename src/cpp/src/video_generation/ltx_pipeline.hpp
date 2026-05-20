@@ -957,10 +957,13 @@ public:
                                                            transformer_temporal_patch_size);
 
         const size_t video_sequence_length = m_latent_num_frames * m_latent_height * m_latent_width;
-        m_scheduler->set_timesteps(video_sequence_length,
-                                   merged_generation_config.num_inference_steps,
-                                   merged_generation_config.strength);
-        std::vector<float> timesteps = m_scheduler->get_float_timesteps();
+        std::vector<float> timesteps;
+        if (merged_generation_config.strength > 0.0f) {
+            m_scheduler->set_timesteps(video_sequence_length,
+                                       merged_generation_config.num_inference_steps,
+                                       merged_generation_config.strength);
+            timesteps = m_scheduler->get_float_timesteps();
+        }
 
         ov::Tensor rope_interpolation_scale(ov::element::f32, {3});
         const float frame_rate =
