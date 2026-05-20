@@ -11,6 +11,8 @@ void validate_generation_config(const VideoGenerationConfig& config) {
     if (config.guidance_scale <= 1.0f && config.negative_prompt != std::nullopt) {
         GENAI_WARN("Guidance scale <= 1.0 ignores negative prompt");
     }
+    OPENVINO_ASSERT(config.strength >= 0.0f && config.strength <= 1.0f,
+                    "Parameter 'strength' must be in range [0, 1] but got ", config.strength);
 }
 
 void update_generation_config(VideoGenerationConfig& config, const ov::AnyMap& properties) {
