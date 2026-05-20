@@ -99,5 +99,21 @@ void init_video_generation_pipelines(py::module_& m) {
                 }
                 return result;
             },
+            py::arg("prompt"))
+        .def(
+            "generate",
+            [](ov::genai::Text2VideoPipeline& pipe,
+               const ov::Tensor& image,
+               const std::string& prompt,
+               const py::kwargs& kwargs) {
+                auto properties = pyutils::kwargs_to_any_map(kwargs);
+                ov::genai::VideoGenerationResult result;
+                {
+                    py::gil_scoped_release rel;
+                    result = pipe.generate(image, prompt, properties);
+                }
+                return result;
+            },
+            py::arg("image"),
             py::arg("prompt"));
 }

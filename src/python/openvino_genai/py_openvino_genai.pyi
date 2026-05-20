@@ -3738,7 +3738,16 @@ class Text2VideoPipeline:
     @typing.overload
     def compile(self, text_encode_device: str, denoise_device: str, vae_device: str, **kwargs) -> None:
         ...
+    @typing.overload
     def generate(self, prompt: str, **kwargs) -> VideoGenerationResult:
+        ...
+    @typing.overload
+    def generate(self, image: openvino._pyopenvino.Tensor, prompt: str, **kwargs) -> VideoGenerationResult:
+        """
+        Image-to-video generation. Frame 0 is anchored to the encoded conditioning image.
+        image must be uint8 with shape [H, W, 3] or [1, H, W, 3] (NHWC).
+        Requires vae_encoder in the model directory.
+        """
         ...
     def get_generation_config(self) -> VideoGenerationConfig:
         ...
