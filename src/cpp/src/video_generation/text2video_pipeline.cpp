@@ -21,7 +21,7 @@ VideoGenerationResult Text2VideoPipeline::generate(const std::string& positive_p
 VideoGenerationResult Text2VideoPipeline::generate(const ov::Tensor& image,
                                                     const std::string& positive_prompt,
                                                     const ov::AnyMap& properties) {
-    return m_impl->generate_i2v(image, positive_prompt, properties);
+    return m_impl->generate(image, positive_prompt, properties);
 }
 
 const VideoGenerationConfig& Text2VideoPipeline::get_generation_config() const {

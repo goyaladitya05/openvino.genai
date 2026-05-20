@@ -849,9 +849,9 @@ public:
         return VideoGenerationResult{video, m_perf_metrics};
     }
 
-    VideoGenerationResult generate_i2v(const ov::Tensor& image,
-                                       const std::string& positive_prompt,
-                                       const ov::AnyMap& properties = {}) {
+    VideoGenerationResult generate(const ov::Tensor& image,
+                                   const std::string& positive_prompt,
+                                   const ov::AnyMap& properties = {}) {
         const auto gen_start = std::chrono::steady_clock::now();
         m_perf_metrics.clean_up();
 
