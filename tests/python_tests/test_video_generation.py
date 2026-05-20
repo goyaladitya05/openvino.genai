@@ -533,3 +533,100 @@ class TestLoRAVideoGeneration:
         assert hasattr(model, "set_adapters")
 
         model.set_adapters(None)
+
+
+class TestImage2VideoPipeline:
+    @pytest.fixture
+    def require_encoder(self, video_generation_model):
+        encoder_path = Path(video_generation_model) / "vae_encoder"
+        if not encoder_path.exists():
+            pytest.skip("vae_encoder not available — I2V tests require it")
+
+    @pytest.fixture
+    def dummy_image(self):
+        return ov.Tensor(np.zeros([32, 32, 3], dtype=np.uint8))
+
+    def test_i2v_generate_runs(self, video_generation_model, require_encoder, dummy_image):
+        pipe = ov_genai.Text2VideoPipeline(video_generation_model, "CPU")
+        result = pipe.generate(dummy_image, "test prompt", height=32, width=32, num_frames=9, num_inference_steps=2)
+        assert result is not None
+        assert result.video is not None
+
+    def test_i2v_strength_1_0(self, video_generation_model, require_encoder, dummy_image):
+        pipe = ov_genai.Text2VideoPipeline(video_generation_model, "CPU")
+        result = pipe.generate(
+            dummy_image, "test prompt", height=32, width=32, num_frames=9, num_inference_steps=2, strength=1.0
+        )
+        assert result.video is not None
+
+    def test_i2v_strength_0_5(self, video_generation_model, require_encoder, dummy_image):
+        pipe = ov_genai.Text2VideoPipeline(video_generation_model, "CPU")
+        result = pipe.generate(
+            dummy_image, "test prompt", height=32, width=32, num_frames=9, num_inference_steps=4, strength=0.5
+        )
+        assert result.video is not None
+
+    def test_i2v_strength_0_0(self, video_generation_model, require_encoder, dummy_image):
+        """strength=0.0 skips denoising — output is the conditioning frame with generated context."""
+        pipe = ov_genai.Text2VideoPipeline(video_generation_model, "CPU")
+        result = pipe.generate(
+            dummy_image, "test prompt", height=32, width=32, num_frames=9, num_inference_steps=2, strength=0.0
+        )
+        assert result.video is not None
+
+    def test_i2v_lora_passthrough(self, video_generation_model, require_encoder, dummy_image):
+        adapter_config = ov_genai.AdapterConfig()
+        pipe = ov_genai.Text2VideoPipeline(video_generation_model, "CPU", adapters=adapter_config)
+        result = pipe.generate(
+            dummy_image,
+            "test prompt",
+            height=32,
+            width=32,
+            num_frames=9,
+            num_inference_steps=2,
+            adapters=adapter_config,
+        )
+        assert result.video is not None
+
+    def test_i2v_no_encoder_raises(self, video_generation_model):
+        encoder_path = Path(video_generation_model) / "vae_encoder"
+        if encoder_path.exists():
+            pytest.skip("vae_encoder present — this test requires its absence")
+        pipe = ov_genai.Text2VideoPipeline(video_generation_model, "CPU")
+        dummy = ov.Tensor(np.zeros([32, 32, 3], dtype=np.uint8))
+        with pytest.raises(RuntimeError, match="requires a VAE encoder"):
+            pipe.generate(dummy, "test prompt", height=32, width=32, num_frames=9, num_inference_steps=2)
+
+    def test_i2v_output_determinism(self, video_generation_model, require_encoder, dummy_image):
+        pipe = ov_genai.Text2VideoPipeline(video_generation_model, "CPU")
+        common_kwargs = dict(height=32, width=32, num_frames=9, num_inference_steps=2)
+
+        result1 = pipe.generate(dummy_image, "test prompt", **common_kwargs, generator=ov_genai.CppStdGenerator(42))
+        result2 = pipe.generate(dummy_image, "test prompt", **common_kwargs, generator=ov_genai.CppStdGenerator(42))
+        np.testing.assert_array_equal(np.array(result1.video), np.array(result2.video))
+
+    def test_i2v_image_nhwc_batch_dim(self, video_generation_model, require_encoder):
+        """[1, H, W, 3] input (with explicit batch dim) should work as well as [H, W, 3]."""
+        pipe = ov_genai.Text2VideoPipeline(video_generation_model, "CPU")
+        img_3d = ov.Tensor(np.zeros([32, 32, 3], dtype=np.uint8))
+        img_4d = ov.Tensor(np.zeros([1, 32, 32, 3], dtype=np.uint8))
+
+        r3 = pipe.generate(
+            img_3d,
+            "test",
+            height=32,
+            width=32,
+            num_frames=9,
+            num_inference_steps=2,
+            generator=ov_genai.CppStdGenerator(7),
+        )
+        r4 = pipe.generate(
+            img_4d,
+            "test",
+            height=32,
+            width=32,
+            num_frames=9,
+            num_inference_steps=2,
+            generator=ov_genai.CppStdGenerator(7),
+        )
+        np.testing.assert_array_equal(np.array(r3.video), np.array(r4.video))
