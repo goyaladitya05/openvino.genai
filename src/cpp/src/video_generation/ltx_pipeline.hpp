@@ -5,7 +5,6 @@
 
 #include <cmath>
 #include <fstream>
-#include <iostream>
 #include <nlohmann/json.hpp>
 #include <numeric>
 
@@ -297,8 +296,6 @@ class Text2VideoPipeline::LTXPipeline {
     std::shared_ptr<T5EncoderModel> m_t5_text_encoder;
     std::shared_ptr<LTXVideoTransformer3DModel> m_transformer;
     std::shared_ptr<AutoencoderKLLTXVideo> m_vae;
-    // Preprocessing uses a private Core to avoid deadlock on singleton_core's
-    // thread pool after the large transformer is compiled.
     ov::Core m_preprocess_core;
     ov::InferRequest m_preprocess_request;
     VideoGenerationPerfMetrics m_perf_metrics;
@@ -432,30 +429,15 @@ class Text2VideoPipeline::LTXPipeline {
                         "Conditioning image (", H, "x", W, ") must be pre-resized to ",
                         height, "x", width, " before calling generate()");
 
-        // Ensure 4D [1, H, W, C] for preprocessing
         ov::Tensor input_4d(ov::element::u8, {1, H, W, C});
         std::memcpy(input_4d.data<uint8_t>(), image.data<const uint8_t>(), H * W * C);
-        std::cout << "[I2V] preprocess: set_input_tensor" << std::endl;
 
-        // NHWC u8 → NCHW f32, normalized to [-1, 1]
         m_preprocess_request.set_input_tensor(input_4d);
-        std::cout << "[I2V] preprocess: infer start" << std::endl;
         m_preprocess_request.infer();
-        std::cout << "[I2V] preprocess: infer done" << std::endl;
         ov::Tensor processed = m_preprocess_request.get_output_tensor();
-        std::cout << "[I2V] preprocess: get_output_tensor done, shape=" << processed.get_shape()
-                  << " type=" << processed.get_element_type() << std::endl;
-        std::cout << "[I2V] preprocess: getting src ptr" << std::endl;
-        const float* src = processed.data<const float>();
-        std::cout << "[I2V] preprocess: src ptr=" << (void*)src << std::endl;
-        std::cout << "[I2V] preprocess: allocating out tensor" << std::endl;
+
         ov::Tensor out(ov::element::f32, {1, C, 1, static_cast<size_t>(height), static_cast<size_t>(width)});
-        std::cout << "[I2V] preprocess: getting dst ptr" << std::endl;
-        float* dst = out.data<float>();
-        std::cout << "[I2V] preprocess: dst ptr=" << (void*)dst << std::endl;
-        std::cout << "[I2V] preprocess: memcpy " << (C * H * W * sizeof(float)) << " bytes" << std::endl;
-        std::memcpy(dst, src, C * H * W * sizeof(float));
-        std::cout << "[I2V] preprocess: copy done" << std::endl;
+        std::memcpy(out.data<float>(), processed.data<const float>(), C * H * W * sizeof(float));
         return out;
     }
 
@@ -943,44 +925,31 @@ public:
         m_latent_height = merged_generation_config.height / spatial_compression_ratio;
         m_latent_width = merged_generation_config.width / spatial_compression_ratio;
 
-        std::cout << "[I2V] latent dims: frames=" << m_latent_num_frames
-                  << " h=" << m_latent_height << " w=" << m_latent_width << std::endl;
-
         // Encode conditioning image → [1, C, 1, H_lat, W_lat]
-        std::cout << "[I2V] preprocess_conditioning_image start" << std::endl;
         ov::Tensor preprocessed = preprocess_conditioning_image(
             image, merged_generation_config.height, merged_generation_config.width);
-        std::cout << "[I2V] preprocess done, shape: " << preprocessed.get_shape() << std::endl;
-
-        std::cout << "[I2V] vae encode start" << std::endl;
         ov::Tensor image_latent = m_vae->encode(preprocessed, merged_generation_config.generator);
-        std::cout << "[I2V] vae encode done, shape: " << image_latent.get_shape() << std::endl;
 
         if (merged_generation_config.num_videos_per_prompt > 1) {
             image_latent = numpy_utils::repeat(image_latent, merged_generation_config.num_videos_per_prompt);
         }
 
-        std::cout << "[I2V] compute_hidden_states start" << std::endl;
         compute_hidden_states(positive_prompt,
                               merged_generation_config.negative_prompt.value_or(""),
                               merged_generation_config,
                               use_classifier_free_guidance);
-        std::cout << "[I2V] compute_hidden_states done" << std::endl;
 
         // Mechanism A: frame 0 = image latent, frames 1..F-1 = noise
-        std::cout << "[I2V] prepare_latents_i2v start" << std::endl;
         ov::Tensor latent = prepare_latents_i2v(merged_generation_config,
                                                 num_channels_latents,
                                                 transformer_spatial_patch_size,
                                                 transformer_temporal_patch_size,
                                                 image_latent);
-        std::cout << "[I2V] prepare_latents_i2v done, packed shape: " << latent.get_shape() << std::endl;
 
         // Pre-pack frame-0 tokens once for Mechanism C re-lock
         const ov::Tensor packed_frame0 = pack_image_frame0(image_latent,
                                                            transformer_spatial_patch_size,
                                                            transformer_temporal_patch_size);
-        std::cout << "[I2V] packed_frame0 shape: " << packed_frame0.get_shape() << std::endl;
 
         const size_t video_sequence_length = m_latent_num_frames * m_latent_height * m_latent_width;
         std::vector<float> timesteps;
@@ -990,8 +959,6 @@ public:
                                        merged_generation_config.strength);
             timesteps = m_scheduler->get_float_timesteps();
         }
-        std::cout << "[I2V] timesteps count: " << timesteps.size()
-                  << " (strength=" << merged_generation_config.strength << ")" << std::endl;
 
         ov::Tensor rope_interpolation_scale(ov::element::f32, {3});
         const float frame_rate =
@@ -1164,16 +1131,12 @@ public:
         m_compile_properties = properties;
         m_is_compiled = true;
         m_compiled_batch_size_multiplier = m_reshape_batch_size_multiplier;
-        std::cout << "[LTX] compile: m_has_encoder=" << m_has_encoder << std::endl;
         if (m_has_encoder) {
-            std::cout << "[LTX] compile: building preprocess model" << std::endl;
             auto param = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, ov::PartialShape::dynamic(4));
             auto result = std::make_shared<ov::op::v0::Result>(param);
             auto model = std::make_shared<ov::Model>(ov::ResultVector{result}, ov::ParameterVector{param});
             ImageProcessor::merge_image_preprocessing(model, true, false, false);
-            std::cout << "[LTX] compile: compiling preprocess model on private core" << std::endl;
             m_preprocess_request = m_preprocess_core.compile_model(model, "CPU").create_infer_request();
-            std::cout << "[LTX] compile: preprocess model ready" << std::endl;
         }
     }
 
