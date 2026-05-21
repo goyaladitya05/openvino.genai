@@ -418,14 +418,6 @@ class Text2VideoPipeline::LTXPipeline {
         m_image_resizer = std::make_shared<ImageResizer>(
             "CPU", ov::element::u8, "NHWC", ov::op::v11::Interpolate::InterpolateMode::BICUBIC_PILLOW);
         m_image_processor = std::make_shared<ImageProcessor>("CPU", true, false, false);
-
-        // Run a dummy inference pass so the OV CPU plugin JIT-compiles these models now,
-        // before the transformer occupies the thread pool. Without this warmup the first
-        // real call to execute() after T2V inference deadlocks on the CPU thread pool.
-        ov::Tensor warmup(ov::element::u8, {1, 32, 32, 3});
-        std::memset(warmup.data<uint8_t>(), 128, warmup.get_byte_size());
-        ov::Tensor resized = m_image_resizer->execute(warmup, 32, 32);
-        m_image_processor->execute(resized);
     }
 
     ov::Tensor preprocess_conditioning_image(const ov::Tensor& image, int64_t height, int64_t width) {
@@ -575,26 +567,20 @@ public:
     LTXPipeline(const std::filesystem::path& models_dir,
                 const std::string& device,
                 const ov::AnyMap& properties,
-                std::chrono::steady_clock::time_point start_time = std::chrono::steady_clock::now())
-        : m_scheduler{cast_scheduler(Scheduler::from_config(models_dir / "scheduler/scheduler_config.json"))},
-          m_t5_text_encoder{std::make_shared<T5EncoderModel>(models_dir / "text_encoder", device, properties)},
-          m_transformer{std::make_shared<LTXVideoTransformer3DModel>(models_dir / "transformer", device, properties)},
-          m_generation_config{LTX_VIDEO_DEFAULT_CONFIG} {
-        std::tie(m_vae, m_has_encoder) = load_vae(models_dir, device, properties);
+                std::chrono::steady_clock::time_point start_time = std::chrono::steady_clock::now()) {
         m_models_dir = models_dir;
-        m_text_encode_device = device;
-        m_denoise_device = device;
-        m_vae_device = device;
-        m_compile_properties = properties;
-        m_is_compiled = true;
-        update_adapters_from_properties(properties, m_generation_config.adapters);
+        m_scheduler = cast_scheduler(Scheduler::from_config(models_dir / "scheduler/scheduler_config.json"));
+        m_t5_text_encoder = std::make_shared<T5EncoderModel>(models_dir / "text_encoder");
+        m_transformer = std::make_shared<LTXVideoTransformer3DModel>(models_dir / "transformer");
+        std::tie(m_vae, m_has_encoder) = load_vae(models_dir);
+        m_generation_config = LTX_VIDEO_DEFAULT_CONFIG;
+
         const std::filesystem::path model_index_path = models_dir / "model_index.json";
         std::ifstream file(model_index_path);
         OPENVINO_ASSERT(file.is_open(), "Failed to open ", model_index_path);
         OPENVINO_ASSERT("LTXPipeline" == nlohmann::json::parse(file)["_class_name"].get<std::string>());
-        if (m_has_encoder) {
-            init_image_processors();
-        }
+
+        compile(device, properties);
         m_load_time = Ms{std::chrono::steady_clock::now() - start_time};
     }
 
@@ -1146,6 +1132,9 @@ public:
                  const std::string& vae_device,
                  const ov::AnyMap& properties) {
         update_adapters_from_properties(properties, m_generation_config.adapters);
+        if (m_has_encoder) {
+            init_image_processors();
+        }
         m_t5_text_encoder->compile(text_encode_device, properties);
         m_vae->compile(vae_device, properties);
         m_transformer->compile(denoise_device, properties);
@@ -1155,9 +1144,6 @@ public:
         m_compile_properties = properties;
         m_is_compiled = true;
         m_compiled_batch_size_multiplier = m_reshape_batch_size_multiplier;
-        if (m_has_encoder) {
-            init_image_processors();
-        }
     }
 
     void compile(const std::string& device, const ov::AnyMap& properties) {
