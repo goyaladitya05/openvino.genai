@@ -418,34 +418,35 @@ class Text2VideoPipeline::LTXPipeline {
         m_image_resizer = std::make_shared<ImageResizer>(
             "CPU", ov::element::u8, "NHWC", ov::op::v11::Interpolate::InterpolateMode::BICUBIC_PILLOW);
         m_image_processor = std::make_shared<ImageProcessor>("CPU", true, false, false);
+
+        // Run a dummy inference pass so the OV CPU plugin JIT-compiles these models now,
+        // before the transformer occupies the thread pool. Without this warmup the first
+        // real call to execute() after T2V inference deadlocks on the CPU thread pool.
+        ov::Tensor warmup(ov::element::u8, {1, 32, 32, 3});
+        std::memset(warmup.data<uint8_t>(), 128, warmup.get_byte_size());
+        ov::Tensor resized = m_image_resizer->execute(warmup, 32, 32);
+        m_image_processor->execute(resized);
     }
 
     ov::Tensor preprocess_conditioning_image(const ov::Tensor& image, int64_t height, int64_t width) {
-        std::cout << "[I2V DBG] preprocess: input shape rank=" << image.get_shape().size() << " type=" << image.get_element_type() << std::endl;
         ov::Tensor img;
         const ov::Shape& raw_shape = image.get_shape();
         if (raw_shape.size() == 3) {
             // [H, W, 3] → [1, H, W, 3]
             img = ov::Tensor(image.get_element_type(), {1, raw_shape[0], raw_shape[1], raw_shape[2]});
-            std::cout << "[I2V DBG] preprocess: copy_to [1," << raw_shape[0] << "," << raw_shape[1] << "," << raw_shape[2] << "] ..." << std::endl;
             image.copy_to(img);
-            std::cout << "[I2V DBG] preprocess: copy_to done" << std::endl;
         } else {
             img = image;
         }
         OPENVINO_ASSERT(img.get_shape().size() == 4 && img.get_element_type() == ov::element::u8,
             "Conditioning image must be uint8 with shape [H, W, 3] or [1, H, W, 3] (NHWC)");
 
-        std::cout << "[I2V DBG] preprocess: image_resizer->execute ..." << std::endl;
         img = m_image_resizer->execute(img, height, width);  // [1, H, W, 3] u8
-        std::cout << "[I2V DBG] preprocess: image_resizer done" << std::endl;
         img = m_image_processor->execute(img);               // [1, 3, H, W] f32 in [-1, 1]
-        std::cout << "[I2V DBG] preprocess: image_processor done" << std::endl;
 
         // Add frame dimension for VAE encoder input [B, C, F, H, W]
         const ov::Shape& s = img.get_shape();
         img.set_shape({s[0], s[1], 1, s[2], s[3]});
-        std::cout << "[I2V DBG] preprocess: done, output shape [" << s[0] << "," << s[1] << ",1," << s[2] << "," << s[3] << "]" << std::endl;
         return img;
     }
 
@@ -591,6 +592,9 @@ public:
         std::ifstream file(model_index_path);
         OPENVINO_ASSERT(file.is_open(), "Failed to open ", model_index_path);
         OPENVINO_ASSERT("LTXPipeline" == nlohmann::json::parse(file)["_class_name"].get<std::string>());
+        if (m_has_encoder) {
+            init_image_processors();
+        }
         m_load_time = Ms{std::chrono::steady_clock::now() - start_time};
     }
 
@@ -937,36 +941,25 @@ public:
         m_latent_width = merged_generation_config.width / spatial_compression_ratio;
 
         // Encode conditioning image → [1, C, 1, H_lat, W_lat]
-        std::cout << "[I2V DBG] init_image_processors ..." << std::endl;
-        init_image_processors();
-        std::cout << "[I2V DBG] preprocess_conditioning_image ..." << std::endl;
         ov::Tensor preprocessed = preprocess_conditioning_image(
             image, merged_generation_config.height, merged_generation_config.width);
-        std::cout << "[I2V DBG] vae->encode ..." << std::endl;
         ov::Tensor image_latent = m_vae->encode(preprocessed, merged_generation_config.generator);
-        std::cout << "[I2V DBG] vae->encode done, image_latent shape: ";
-        for (auto d : image_latent.get_shape()) std::cout << d << " ";
-        std::cout << std::endl;
 
         if (merged_generation_config.num_videos_per_prompt > 1) {
             image_latent = numpy_utils::repeat(image_latent, merged_generation_config.num_videos_per_prompt);
         }
 
-        std::cout << "[I2V DBG] compute_hidden_states ..." << std::endl;
         compute_hidden_states(positive_prompt,
                               merged_generation_config.negative_prompt.value_or(""),
                               merged_generation_config,
                               use_classifier_free_guidance);
-        std::cout << "[I2V DBG] compute_hidden_states done" << std::endl;
 
         // Mechanism A: frame 0 = image latent, frames 1..F-1 = noise
-        std::cout << "[I2V DBG] prepare_latents_i2v ..." << std::endl;
         ov::Tensor latent = prepare_latents_i2v(merged_generation_config,
                                                 num_channels_latents,
                                                 transformer_spatial_patch_size,
                                                 transformer_temporal_patch_size,
                                                 image_latent);
-        std::cout << "[I2V DBG] prepare_latents_i2v done" << std::endl;
 
         // Pre-pack frame-0 tokens once for Mechanism C re-lock
         const ov::Tensor packed_frame0 = pack_image_frame0(image_latent,
@@ -974,7 +967,6 @@ public:
                                                            transformer_temporal_patch_size);
 
         const size_t video_sequence_length = m_latent_num_frames * m_latent_height * m_latent_width;
-        std::cout << "[I2V DBG] set_timesteps (strength=" << merged_generation_config.strength << ") ..." << std::endl;
         std::vector<float> timesteps;
         if (merged_generation_config.strength > 0.0f) {
             m_scheduler->set_timesteps(video_sequence_length,
@@ -982,7 +974,6 @@ public:
                                        merged_generation_config.strength);
             timesteps = m_scheduler->get_float_timesteps();
         }
-        std::cout << "[I2V DBG] timesteps count: " << timesteps.size() << ", entering denoising loop" << std::endl;
 
         ov::Tensor rope_interpolation_scale(ov::element::f32, {3});
         const float frame_rate =
@@ -1155,6 +1146,9 @@ public:
         m_compile_properties = properties;
         m_is_compiled = true;
         m_compiled_batch_size_multiplier = m_reshape_batch_size_multiplier;
+        if (m_has_encoder) {
+            init_image_processors();
+        }
     }
 
     void compile(const std::string& device, const ov::AnyMap& properties) {
