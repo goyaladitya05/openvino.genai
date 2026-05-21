@@ -3746,6 +3746,7 @@ class Text2VideoPipeline:
         """
         Image-to-video generation. Frame 0 is anchored to the encoded conditioning image.
         image must be uint8 with shape [H, W, 3] or [1, H, W, 3] (NHWC).
+        Resized internally to the requested generation height and width if not already that size.
         Requires vae_encoder in the model directory.
         """
         ...

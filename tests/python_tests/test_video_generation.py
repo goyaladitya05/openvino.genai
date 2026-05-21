@@ -567,7 +567,6 @@ class TestImage2VideoPipeline:
         assert result.video is not None
 
     def test_i2v_strength_0_0(self, video_generation_model, require_encoder, dummy_image):
-        """strength=0.0 skips denoising — output is the conditioning frame with generated context."""
         pipe = ov_genai.Text2VideoPipeline(video_generation_model, "CPU")
         result = pipe.generate(
             dummy_image, "test prompt", height=32, width=32, num_frames=9, num_inference_steps=2, strength=0.0
@@ -588,11 +587,12 @@ class TestImage2VideoPipeline:
         )
         assert result.video is not None
 
-    def test_i2v_no_encoder_raises(self, video_generation_model):
-        encoder_path = Path(video_generation_model) / "vae_encoder"
-        if encoder_path.exists():
-            pytest.skip("vae_encoder present — this test requires its absence")
-        pipe = ov_genai.Text2VideoPipeline(video_generation_model, "CPU")
+    def test_i2v_no_encoder_raises(self, video_generation_model, tmp_path):
+        import shutil
+
+        model_without_encoder = tmp_path / "model_no_enc"
+        shutil.copytree(video_generation_model, model_without_encoder, ignore=shutil.ignore_patterns("vae_encoder"))
+        pipe = ov_genai.Text2VideoPipeline(str(model_without_encoder), "CPU")
         dummy = ov.Tensor(np.zeros([32, 32, 3], dtype=np.uint8))
         with pytest.raises(RuntimeError, match="requires a VAE encoder"):
             pipe.generate(dummy, "test prompt", height=32, width=32, num_frames=9, num_inference_steps=2)

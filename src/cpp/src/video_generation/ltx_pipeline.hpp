@@ -17,8 +17,6 @@
 #include "openvino/op/divide.hpp"
 #include "openvino/op/multiply.hpp"
 
-#include "openvino/op/parameter.hpp"
-#include "openvino/op/result.hpp"
 #include "image_generation/image_processor.hpp"
 #include "image_generation/numpy_utils.hpp"
 #include "image_generation/schedulers/ischeduler.hpp"
@@ -296,8 +294,8 @@ class Text2VideoPipeline::LTXPipeline {
     std::shared_ptr<T5EncoderModel> m_t5_text_encoder;
     std::shared_ptr<LTXVideoTransformer3DModel> m_transformer;
     std::shared_ptr<AutoencoderKLLTXVideo> m_vae;
-    ov::Core m_preprocess_core;
-    ov::InferRequest m_preprocess_request;
+    std::shared_ptr<ImageProcessor> m_image_processor;
+    std::shared_ptr<ImageResizer> m_image_resizer;
     VideoGenerationPerfMetrics m_perf_metrics;
     Ms m_load_time;
 
@@ -413,31 +411,33 @@ class Text2VideoPipeline::LTXPipeline {
 
     // Preprocess a conditioning image for the VAE encoder.
     // Accepts [H, W, 3] or [1, H, W, 3] uint8 NHWC.
-    // Returns [1, 3, 1, H, W] float32 normalized to [-1, 1].
-    // Resize is not performed: the caller must pre-resize to (height, width).
+    // Resizes to (height, width) if necessary, then normalizes to [-1, 1].
+    // Returns [1, 3, 1, height, width] float32 NCTHW.
     ov::Tensor preprocess_conditioning_image(const ov::Tensor& image, int64_t height, int64_t width) {
         const ov::Shape& raw_shape = image.get_shape();
         OPENVINO_ASSERT((raw_shape.size() == 3 || raw_shape.size() == 4) &&
                             image.get_element_type() == ov::element::u8,
                         "Conditioning image must be uint8 with shape [H, W, 3] or [1, H, W, 3] (NHWC)");
 
+        if (raw_shape.size() == 4) {
+            OPENVINO_ASSERT(raw_shape[0] == 1, "Batch dimension must be 1, got ", raw_shape[0]);
+        }
         const size_t H = raw_shape.size() == 3 ? raw_shape[0] : raw_shape[1];
         const size_t W = raw_shape.size() == 3 ? raw_shape[1] : raw_shape[2];
         const size_t C = raw_shape.size() == 3 ? raw_shape[2] : raw_shape[3];
         OPENVINO_ASSERT(C == 3, "Conditioning image must have 3 channels (RGB), got ", C);
-        OPENVINO_ASSERT(static_cast<int64_t>(H) == height && static_cast<int64_t>(W) == width,
-                        "Conditioning image (", H, "x", W, ") must be pre-resized to ",
-                        height, "x", width, " before calling generate()");
 
         ov::Tensor input_4d(ov::element::u8, {1, H, W, C});
         std::memcpy(input_4d.data<uint8_t>(), image.data<const uint8_t>(), H * W * C);
 
-        m_preprocess_request.set_input_tensor(input_4d);
-        m_preprocess_request.infer();
-        ov::Tensor processed = m_preprocess_request.get_output_tensor();
+        if (static_cast<int64_t>(H) != height || static_cast<int64_t>(W) != width) {
+            input_4d = m_image_resizer->execute(input_4d, height, width);
+        }
+
+        ov::Tensor processed = m_image_processor->execute(input_4d);
 
         ov::Tensor out(ov::element::f32, {1, C, 1, static_cast<size_t>(height), static_cast<size_t>(width)});
-        std::memcpy(out.data<float>(), processed.data<const float>(), C * H * W * sizeof(float));
+        std::memcpy(out.data<float>(), processed.data<const float>(), C * static_cast<size_t>(height) * static_cast<size_t>(width) * sizeof(float));
         return out;
     }
 
@@ -1132,11 +1132,8 @@ public:
         m_is_compiled = true;
         m_compiled_batch_size_multiplier = m_reshape_batch_size_multiplier;
         if (m_has_encoder) {
-            auto param = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, ov::PartialShape::dynamic(4));
-            auto result = std::make_shared<ov::op::v0::Result>(param);
-            auto model = std::make_shared<ov::Model>(ov::ResultVector{result}, ov::ParameterVector{param});
-            ImageProcessor::merge_image_preprocessing(model, true, false, false);
-            m_preprocess_request = m_preprocess_core.compile_model(model, "CPU").create_infer_request();
+            m_image_processor = std::make_shared<ImageProcessor>("CPU");
+            m_image_resizer = std::make_shared<ImageResizer>("CPU", ov::element::u8, "NHWC", ov::op::v11::Interpolate::InterpolateMode::BICUBIC_PILLOW);
         }
     }
 

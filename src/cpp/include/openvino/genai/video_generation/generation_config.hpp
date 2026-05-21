@@ -68,8 +68,9 @@ struct VideoGenerationConfig {
     std::optional<AdapterConfig> adapters = std::nullopt;
 
     /**
-     * Strength of noise applied to the conditioning image in image-to-video generation.
-     * 1.0 = full denoising from maximum noise; 0.0 = no denoising (return conditioning frames directly).
+     * Strength of noise applied to conditioning inputs in image-to-video generation.
+     * 1.0 = full denoising from maximum noise; 0.0 = minimum noise contribution from conditioning inputs.
+     * A value of 0.0 does not guarantee that conditioning frames are returned directly unchanged.
      * Ignored in text-to-video generation.
      */
     float strength = 1.0f;
