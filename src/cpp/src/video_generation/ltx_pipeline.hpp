@@ -17,6 +17,8 @@
 #include "openvino/op/divide.hpp"
 #include "openvino/op/multiply.hpp"
 
+#include "openvino/op/parameter.hpp"
+#include "openvino/op/result.hpp"
 #include "image_generation/image_processor.hpp"
 #include "image_generation/numpy_utils.hpp"
 #include "image_generation/schedulers/ischeduler.hpp"
@@ -294,7 +296,10 @@ class Text2VideoPipeline::LTXPipeline {
     std::shared_ptr<T5EncoderModel> m_t5_text_encoder;
     std::shared_ptr<LTXVideoTransformer3DModel> m_transformer;
     std::shared_ptr<AutoencoderKLLTXVideo> m_vae;
-    std::shared_ptr<ImageProcessor> m_image_processor;
+    // Preprocessing uses a private Core to avoid deadlock on singleton_core's
+    // thread pool after the large transformer is compiled.
+    ov::Core m_preprocess_core;
+    ov::InferRequest m_preprocess_request;
     VideoGenerationPerfMetrics m_perf_metrics;
     Ms m_load_time;
 
@@ -426,12 +431,14 @@ class Text2VideoPipeline::LTXPipeline {
                         "Conditioning image (", H, "x", W, ") must be pre-resized to ",
                         height, "x", width, " before calling generate()");
 
-        // Ensure 4D [1, H, W, C] for ImageProcessor
+        // Ensure 4D [1, H, W, C] for preprocessing
         ov::Tensor input_4d(ov::element::u8, {1, H, W, C});
         std::memcpy(input_4d.data<uint8_t>(), image.data<const uint8_t>(), H * W * C);
 
-        // ImageProcessor: NHWC u8 → NCHW f32, normalized to [-1, 1]
-        ov::Tensor processed = m_image_processor->execute(input_4d);  // [1, C, H, W]
+        // NHWC u8 → NCHW f32, normalized to [-1, 1]
+        m_preprocess_request.set_input_tensor(input_4d);
+        m_preprocess_request.infer();
+        ov::Tensor processed = m_preprocess_request.get_output_tensor();  // [1, C, H, W]
 
         // Insert temporal dimension: [1, C, H, W] → [1, C, 1, H, W]
         processed.set_shape({1, C, 1, static_cast<size_t>(height), static_cast<size_t>(width)});
@@ -1129,7 +1136,11 @@ public:
         m_is_compiled = true;
         m_compiled_batch_size_multiplier = m_reshape_batch_size_multiplier;
         if (m_has_encoder) {
-            m_image_processor = std::make_shared<ImageProcessor>("CPU", true, false, false);
+            auto param = std::make_shared<ov::op::v0::Parameter>(ov::element::u8, ov::PartialShape::dynamic(4));
+            auto result = std::make_shared<ov::op::v0::Result>(param);
+            auto model = std::make_shared<ov::Model>(ov::ResultVector{result}, ov::ParameterVector{param});
+            ImageProcessor::merge_image_preprocessing(model, true, false, false);
+            m_preprocess_request = m_preprocess_core.compile_model(model, "CPU").create_infer_request();
         }
     }
 
