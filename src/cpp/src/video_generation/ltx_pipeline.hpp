@@ -17,7 +17,6 @@
 #include "openvino/op/divide.hpp"
 #include "openvino/op/multiply.hpp"
 
-#include "image_generation/image_processor.hpp"
 #include "image_generation/numpy_utils.hpp"
 #include "image_generation/schedulers/ischeduler.hpp"
 #include "image_generation/threaded_callback.hpp"
@@ -407,39 +406,39 @@ class Text2VideoPipeline::LTXPipeline {
         m_transformer->set_hidden_states("width", make_scalar_tensor(m_latent_width));
     }
 
-    std::shared_ptr<ImageResizer> m_image_resizer;
-    std::shared_ptr<ImageProcessor> m_image_processor;
-
-    void init_image_processors() {
-        if (m_image_resizer) {
-            return;
-        }
-        // TODO: support device-specific preprocessing (currently always on CPU like other image pipelines)
-        m_image_resizer = std::make_shared<ImageResizer>(
-            "CPU", ov::element::u8, "NHWC", ov::op::v11::Interpolate::InterpolateMode::BICUBIC_PILLOW);
-        m_image_processor = std::make_shared<ImageProcessor>("CPU", true, false, false);
-    }
-
+    // Preprocess a conditioning image for the VAE encoder.
+    // Accepts [H, W, 3] or [1, H, W, 3] uint8 NHWC.
+    // Returns [1, 3, 1, H, W] float32 normalized to [-1, 1] (matches ImageProcessor do_normalize=true).
+    // Resize is not performed: the caller must pre-resize to (height, width).
     ov::Tensor preprocess_conditioning_image(const ov::Tensor& image, int64_t height, int64_t width) {
-        ov::Tensor img;
         const ov::Shape& raw_shape = image.get_shape();
-        if (raw_shape.size() == 3) {
-            // [H, W, 3] → [1, H, W, 3]
-            img = ov::Tensor(image.get_element_type(), {1, raw_shape[0], raw_shape[1], raw_shape[2]});
-            image.copy_to(img);
-        } else {
-            img = image;
+        OPENVINO_ASSERT((raw_shape.size() == 3 || raw_shape.size() == 4) &&
+                            image.get_element_type() == ov::element::u8,
+                        "Conditioning image must be uint8 with shape [H, W, 3] or [1, H, W, 3] (NHWC)");
+
+        const size_t H = raw_shape.size() == 3 ? raw_shape[0] : raw_shape[1];
+        const size_t W = raw_shape.size() == 3 ? raw_shape[1] : raw_shape[2];
+        const size_t C = raw_shape.size() == 3 ? raw_shape[2] : raw_shape[3];
+        OPENVINO_ASSERT(C == 3,
+                        "Conditioning image must have 3 channels (RGB), got ", C);
+        OPENVINO_ASSERT(static_cast<int64_t>(H) == height && static_cast<int64_t>(W) == width,
+                        "Conditioning image (", H, "x", W, ") must be pre-resized to ",
+                        height, "x", width, " before calling generate()");
+
+        // Normalize NHWC uint8 [0, 255] → NCHW float32 [-1, 1]:
+        // equivalent to ImageProcessor(do_normalize=true): scale(127.5), mean(1.0)
+        ov::Tensor out(ov::element::f32, {1, C, 1, static_cast<size_t>(height), static_cast<size_t>(width)});
+        const uint8_t* src = image.data<const uint8_t>();
+        float* dst = out.data<float>();
+        for (size_t h = 0; h < H; ++h) {
+            for (size_t w = 0; w < W; ++w) {
+                for (size_t c = 0; c < C; ++c) {
+                    dst[c * H * W + h * W + w] =
+                        static_cast<float>(src[h * W * C + w * C + c]) / 127.5f - 1.0f;
+                }
+            }
         }
-        OPENVINO_ASSERT(img.get_shape().size() == 4 && img.get_element_type() == ov::element::u8,
-            "Conditioning image must be uint8 with shape [H, W, 3] or [1, H, W, 3] (NHWC)");
-
-        img = m_image_resizer->execute(img, height, width);  // [1, H, W, 3] u8
-        img = m_image_processor->execute(img);               // [1, 3, H, W] f32 in [-1, 1]
-
-        // Add frame dimension for VAE encoder input [B, C, F, H, W]
-        const ov::Shape& s = img.get_shape();
-        img.set_shape({s[0], s[1], 1, s[2], s[3]});
-        return img;
+        return out;
     }
 
     ov::Tensor prepare_latents_i2v(const VideoGenerationConfig& config,
@@ -527,9 +526,6 @@ public:
     LTXPipeline(const std::filesystem::path& root_dir,
                 std::chrono::steady_clock::time_point start_time = std::chrono::steady_clock::now()) {
         m_models_dir = root_dir;
-        if (std::filesystem::exists(root_dir / "vae_encoder")) {
-            init_image_processors();
-        }
         const std::filesystem::path model_index_path = root_dir / "model_index.json";
 
         std::ifstream file(model_index_path);
@@ -572,9 +568,6 @@ public:
                 const ov::AnyMap& properties,
                 std::chrono::steady_clock::time_point start_time = std::chrono::steady_clock::now()) {
         m_models_dir = models_dir;
-        if (std::filesystem::exists(models_dir / "vae_encoder")) {
-            init_image_processors();
-        }
         m_scheduler = cast_scheduler(Scheduler::from_config(models_dir / "scheduler/scheduler_config.json"));
         m_t5_text_encoder = std::make_shared<T5EncoderModel>(models_dir / "text_encoder");
         m_transformer = std::make_shared<LTXVideoTransformer3DModel>(models_dir / "transformer");
