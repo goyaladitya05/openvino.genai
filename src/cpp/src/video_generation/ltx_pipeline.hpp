@@ -18,9 +18,6 @@
 #include "openvino/op/divide.hpp"
 #include "openvino/op/multiply.hpp"
 
-#include "openvino/op/parameter.hpp"
-#include "openvino/op/result.hpp"
-#include "image_generation/image_processor.hpp"
 #include "image_generation/numpy_utils.hpp"
 #include "image_generation/schedulers/ischeduler.hpp"
 #include "image_generation/threaded_callback.hpp"
@@ -442,13 +439,19 @@ class Text2VideoPipeline::LTXPipeline {
         std::cout << "[I2V] preprocess: infer start" << std::endl;
         m_preprocess_request.infer();
         std::cout << "[I2V] preprocess: infer done" << std::endl;
-        ov::Tensor processed = m_preprocess_request.get_output_tensor();  // [1, C, H, W]
-        std::cout << "[I2V] preprocess: got output tensor, shape=" << processed.get_shape() << std::endl;
-
-        // Copy into a fresh tensor with the temporal dimension inserted to avoid
-        // mutating the infer request's output buffer.
+        ov::Tensor processed = m_preprocess_request.get_output_tensor();
+        std::cout << "[I2V] preprocess: get_output_tensor done, shape=" << processed.get_shape()
+                  << " type=" << processed.get_element_type() << std::endl;
+        std::cout << "[I2V] preprocess: getting src ptr" << std::endl;
+        const float* src = processed.data<const float>();
+        std::cout << "[I2V] preprocess: src ptr=" << (void*)src << std::endl;
+        std::cout << "[I2V] preprocess: allocating out tensor" << std::endl;
         ov::Tensor out(ov::element::f32, {1, C, 1, static_cast<size_t>(height), static_cast<size_t>(width)});
-        std::memcpy(out.data<float>(), processed.data<const float>(), C * H * W * sizeof(float));
+        std::cout << "[I2V] preprocess: getting dst ptr" << std::endl;
+        float* dst = out.data<float>();
+        std::cout << "[I2V] preprocess: dst ptr=" << (void*)dst << std::endl;
+        std::cout << "[I2V] preprocess: memcpy " << (C * H * W * sizeof(float)) << " bytes" << std::endl;
+        std::memcpy(dst, src, C * H * W * sizeof(float));
         std::cout << "[I2V] preprocess: copy done" << std::endl;
         return out;
     }
