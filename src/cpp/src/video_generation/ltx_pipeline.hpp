@@ -443,10 +443,14 @@ class Text2VideoPipeline::LTXPipeline {
         m_preprocess_request.infer();
         std::cout << "[I2V] preprocess: infer done" << std::endl;
         ov::Tensor processed = m_preprocess_request.get_output_tensor();  // [1, C, H, W]
+        std::cout << "[I2V] preprocess: got output tensor, shape=" << processed.get_shape() << std::endl;
 
-        // Insert temporal dimension: [1, C, H, W] → [1, C, 1, H, W]
-        processed.set_shape({1, C, 1, static_cast<size_t>(height), static_cast<size_t>(width)});
-        return processed;
+        // Copy into a fresh tensor with the temporal dimension inserted to avoid
+        // mutating the infer request's output buffer.
+        ov::Tensor out(ov::element::f32, {1, C, 1, static_cast<size_t>(height), static_cast<size_t>(width)});
+        std::memcpy(out.data<float>(), processed.data<const float>(), C * H * W * sizeof(float));
+        std::cout << "[I2V] preprocess: copy done" << std::endl;
+        return out;
     }
 
     ov::Tensor prepare_latents_i2v(const VideoGenerationConfig& config,
