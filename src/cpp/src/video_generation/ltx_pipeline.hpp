@@ -18,6 +18,9 @@
 #include "openvino/op/divide.hpp"
 #include "openvino/op/multiply.hpp"
 
+#include "openvino/op/parameter.hpp"
+#include "openvino/op/result.hpp"
+#include "image_generation/image_processor.hpp"
 #include "image_generation/numpy_utils.hpp"
 #include "image_generation/schedulers/ischeduler.hpp"
 #include "image_generation/threaded_callback.hpp"
