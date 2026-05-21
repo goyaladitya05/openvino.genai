@@ -17,6 +17,7 @@
 #include "openvino/op/divide.hpp"
 #include "openvino/op/multiply.hpp"
 
+#include "image_generation/image_processor.hpp"
 #include "image_generation/numpy_utils.hpp"
 #include "image_generation/schedulers/ischeduler.hpp"
 #include "image_generation/threaded_callback.hpp"
@@ -293,6 +294,7 @@ class Text2VideoPipeline::LTXPipeline {
     std::shared_ptr<T5EncoderModel> m_t5_text_encoder;
     std::shared_ptr<LTXVideoTransformer3DModel> m_transformer;
     std::shared_ptr<AutoencoderKLLTXVideo> m_vae;
+    std::shared_ptr<ImageProcessor> m_image_processor;
     VideoGenerationPerfMetrics m_perf_metrics;
     Ms m_load_time;
 
@@ -408,7 +410,7 @@ class Text2VideoPipeline::LTXPipeline {
 
     // Preprocess a conditioning image for the VAE encoder.
     // Accepts [H, W, 3] or [1, H, W, 3] uint8 NHWC.
-    // Returns [1, 3, 1, H, W] float32 normalized to [-1, 1] (matches ImageProcessor do_normalize=true).
+    // Returns [1, 3, 1, H, W] float32 normalized to [-1, 1].
     // Resize is not performed: the caller must pre-resize to (height, width).
     ov::Tensor preprocess_conditioning_image(const ov::Tensor& image, int64_t height, int64_t width) {
         const ov::Shape& raw_shape = image.get_shape();
@@ -419,26 +421,21 @@ class Text2VideoPipeline::LTXPipeline {
         const size_t H = raw_shape.size() == 3 ? raw_shape[0] : raw_shape[1];
         const size_t W = raw_shape.size() == 3 ? raw_shape[1] : raw_shape[2];
         const size_t C = raw_shape.size() == 3 ? raw_shape[2] : raw_shape[3];
-        OPENVINO_ASSERT(C == 3,
-                        "Conditioning image must have 3 channels (RGB), got ", C);
+        OPENVINO_ASSERT(C == 3, "Conditioning image must have 3 channels (RGB), got ", C);
         OPENVINO_ASSERT(static_cast<int64_t>(H) == height && static_cast<int64_t>(W) == width,
                         "Conditioning image (", H, "x", W, ") must be pre-resized to ",
                         height, "x", width, " before calling generate()");
 
-        // Normalize NHWC uint8 [0, 255] → NCHW float32 [-1, 1]:
-        // equivalent to ImageProcessor(do_normalize=true): scale(127.5), mean(1.0)
-        ov::Tensor out(ov::element::f32, {1, C, 1, static_cast<size_t>(height), static_cast<size_t>(width)});
-        const uint8_t* src = image.data<const uint8_t>();
-        float* dst = out.data<float>();
-        for (size_t h = 0; h < H; ++h) {
-            for (size_t w = 0; w < W; ++w) {
-                for (size_t c = 0; c < C; ++c) {
-                    dst[c * H * W + h * W + w] =
-                        static_cast<float>(src[h * W * C + w * C + c]) / 127.5f - 1.0f;
-                }
-            }
-        }
-        return out;
+        // Ensure 4D [1, H, W, C] for ImageProcessor
+        ov::Tensor input_4d(ov::element::u8, {1, H, W, C});
+        std::memcpy(input_4d.data<uint8_t>(), image.data<const uint8_t>(), H * W * C);
+
+        // ImageProcessor: NHWC u8 → NCHW f32, normalized to [-1, 1]
+        ov::Tensor processed = m_image_processor->execute(input_4d);  // [1, C, H, W]
+
+        // Insert temporal dimension: [1, C, H, W] → [1, C, 1, H, W]
+        processed.set_shape({1, C, 1, static_cast<size_t>(height), static_cast<size_t>(width)});
+        return processed;
     }
 
     ov::Tensor prepare_latents_i2v(const VideoGenerationConfig& config,
@@ -560,6 +557,10 @@ public:
 
         m_generation_config = LTX_VIDEO_DEFAULT_CONFIG;
 
+        if (m_has_encoder) {
+            m_image_processor = std::make_shared<ImageProcessor>("CPU", true, false, false);
+        }
+
         m_load_time = Ms{std::chrono::steady_clock::now() - start_time};
     }
 
@@ -578,6 +579,10 @@ public:
         std::ifstream file(model_index_path);
         OPENVINO_ASSERT(file.is_open(), "Failed to open ", model_index_path);
         OPENVINO_ASSERT("LTXPipeline" == nlohmann::json::parse(file)["_class_name"].get<std::string>());
+
+        if (m_has_encoder) {
+            m_image_processor = std::make_shared<ImageProcessor>("CPU", true, false, false);
+        }
 
         compile(device, properties);
         m_load_time = Ms{std::chrono::steady_clock::now() - start_time};
