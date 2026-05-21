@@ -18,7 +18,6 @@
 #include "openvino/op/multiply.hpp"
 
 #include "image_generation/numpy_utils.hpp"
-#include "image_generation/image_processor.hpp"
 #include "image_generation/schedulers/ischeduler.hpp"
 #include "image_generation/threaded_callback.hpp"
 #include "diffusion_caching/taylorseer_lite.hpp"
@@ -527,6 +526,9 @@ public:
     LTXPipeline(const std::filesystem::path& root_dir,
                 std::chrono::steady_clock::time_point start_time = std::chrono::steady_clock::now()) {
         m_models_dir = root_dir;
+        if (std::filesystem::exists(root_dir / "vae_encoder")) {
+            init_image_processors();
+        }
         const std::filesystem::path model_index_path = root_dir / "model_index.json";
 
         std::ifstream file(model_index_path);
@@ -569,6 +571,9 @@ public:
                 const ov::AnyMap& properties,
                 std::chrono::steady_clock::time_point start_time = std::chrono::steady_clock::now()) {
         m_models_dir = models_dir;
+        if (std::filesystem::exists(models_dir / "vae_encoder")) {
+            init_image_processors();
+        }
         m_scheduler = cast_scheduler(Scheduler::from_config(models_dir / "scheduler/scheduler_config.json"));
         m_t5_text_encoder = std::make_shared<T5EncoderModel>(models_dir / "text_encoder");
         m_transformer = std::make_shared<LTXVideoTransformer3DModel>(models_dir / "transformer");
@@ -1132,9 +1137,6 @@ public:
                  const std::string& vae_device,
                  const ov::AnyMap& properties) {
         update_adapters_from_properties(properties, m_generation_config.adapters);
-        if (m_has_encoder) {
-            init_image_processors();
-        }
         m_t5_text_encoder->compile(text_encode_device, properties);
         m_vae->compile(vae_device, properties);
         m_transformer->compile(denoise_device, properties);
