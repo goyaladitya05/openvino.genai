@@ -1167,7 +1167,7 @@ public:
         std::cout << "[LTX] compile: m_has_encoder=" << m_has_encoder << std::endl;
         if (m_has_encoder) {
             std::cout << "[LTX] compile: building preprocess model" << std::endl;
-            auto param = std::make_shared<ov::op::v0::Parameter>(ov::element::u8, ov::PartialShape::dynamic(4));
+            auto param = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, ov::PartialShape::dynamic(4));
             auto result = std::make_shared<ov::op::v0::Result>(param);
             auto model = std::make_shared<ov::Model>(ov::ResultVector{result}, ov::ParameterVector{param});
             ImageProcessor::merge_image_preprocessing(model, true, false, false);
