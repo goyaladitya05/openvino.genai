@@ -557,10 +557,6 @@ public:
 
         m_generation_config = LTX_VIDEO_DEFAULT_CONFIG;
 
-        if (m_has_encoder) {
-            m_image_processor = std::make_shared<ImageProcessor>("CPU", true, false, false);
-        }
-
         m_load_time = Ms{std::chrono::steady_clock::now() - start_time};
     }
 
@@ -579,10 +575,6 @@ public:
         std::ifstream file(model_index_path);
         OPENVINO_ASSERT(file.is_open(), "Failed to open ", model_index_path);
         OPENVINO_ASSERT("LTXPipeline" == nlohmann::json::parse(file)["_class_name"].get<std::string>());
-
-        if (m_has_encoder) {
-            m_image_processor = std::make_shared<ImageProcessor>("CPU", true, false, false);
-        }
 
         compile(device, properties);
         m_load_time = Ms{std::chrono::steady_clock::now() - start_time};
@@ -1136,6 +1128,9 @@ public:
         m_compile_properties = properties;
         m_is_compiled = true;
         m_compiled_batch_size_multiplier = m_reshape_batch_size_multiplier;
+        if (m_has_encoder) {
+            m_image_processor = std::make_shared<ImageProcessor>("CPU", true, false, false);
+        }
     }
 
     void compile(const std::string& device, const ov::AnyMap& properties) {
