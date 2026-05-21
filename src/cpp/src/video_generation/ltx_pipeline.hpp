@@ -930,26 +930,36 @@ public:
         m_latent_width = merged_generation_config.width / spatial_compression_ratio;
 
         // Encode conditioning image → [1, C, 1, H_lat, W_lat]
+        std::cout << "[I2V DBG] init_image_processors ..." << std::endl;
         init_image_processors();
+        std::cout << "[I2V DBG] preprocess_conditioning_image ..." << std::endl;
         ov::Tensor preprocessed = preprocess_conditioning_image(
             image, merged_generation_config.height, merged_generation_config.width);
+        std::cout << "[I2V DBG] vae->encode ..." << std::endl;
         ov::Tensor image_latent = m_vae->encode(preprocessed, merged_generation_config.generator);
+        std::cout << "[I2V DBG] vae->encode done, image_latent shape: ";
+        for (auto d : image_latent.get_shape()) std::cout << d << " ";
+        std::cout << std::endl;
 
         if (merged_generation_config.num_videos_per_prompt > 1) {
             image_latent = numpy_utils::repeat(image_latent, merged_generation_config.num_videos_per_prompt);
         }
 
+        std::cout << "[I2V DBG] compute_hidden_states ..." << std::endl;
         compute_hidden_states(positive_prompt,
                               merged_generation_config.negative_prompt.value_or(""),
                               merged_generation_config,
                               use_classifier_free_guidance);
+        std::cout << "[I2V DBG] compute_hidden_states done" << std::endl;
 
         // Mechanism A: frame 0 = image latent, frames 1..F-1 = noise
+        std::cout << "[I2V DBG] prepare_latents_i2v ..." << std::endl;
         ov::Tensor latent = prepare_latents_i2v(merged_generation_config,
                                                 num_channels_latents,
                                                 transformer_spatial_patch_size,
                                                 transformer_temporal_patch_size,
                                                 image_latent);
+        std::cout << "[I2V DBG] prepare_latents_i2v done" << std::endl;
 
         // Pre-pack frame-0 tokens once for Mechanism C re-lock
         const ov::Tensor packed_frame0 = pack_image_frame0(image_latent,
@@ -957,6 +967,7 @@ public:
                                                            transformer_temporal_patch_size);
 
         const size_t video_sequence_length = m_latent_num_frames * m_latent_height * m_latent_width;
+        std::cout << "[I2V DBG] set_timesteps (strength=" << merged_generation_config.strength << ") ..." << std::endl;
         std::vector<float> timesteps;
         if (merged_generation_config.strength > 0.0f) {
             m_scheduler->set_timesteps(video_sequence_length,
@@ -964,6 +975,7 @@ public:
                                        merged_generation_config.strength);
             timesteps = m_scheduler->get_float_timesteps();
         }
+        std::cout << "[I2V DBG] timesteps count: " << timesteps.size() << ", entering denoising loop" << std::endl;
 
         ov::Tensor rope_interpolation_scale(ov::element::f32, {3});
         const float frame_rate =
