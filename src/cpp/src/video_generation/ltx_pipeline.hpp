@@ -421,24 +421,31 @@ class Text2VideoPipeline::LTXPipeline {
     }
 
     ov::Tensor preprocess_conditioning_image(const ov::Tensor& image, int64_t height, int64_t width) {
+        std::cout << "[I2V DBG] preprocess: input shape rank=" << image.get_shape().size() << " type=" << image.get_element_type() << std::endl;
         ov::Tensor img;
         const ov::Shape& raw_shape = image.get_shape();
         if (raw_shape.size() == 3) {
             // [H, W, 3] → [1, H, W, 3]
             img = ov::Tensor(image.get_element_type(), {1, raw_shape[0], raw_shape[1], raw_shape[2]});
+            std::cout << "[I2V DBG] preprocess: copy_to [1," << raw_shape[0] << "," << raw_shape[1] << "," << raw_shape[2] << "] ..." << std::endl;
             image.copy_to(img);
+            std::cout << "[I2V DBG] preprocess: copy_to done" << std::endl;
         } else {
             img = image;
         }
         OPENVINO_ASSERT(img.get_shape().size() == 4 && img.get_element_type() == ov::element::u8,
             "Conditioning image must be uint8 with shape [H, W, 3] or [1, H, W, 3] (NHWC)");
 
+        std::cout << "[I2V DBG] preprocess: image_resizer->execute ..." << std::endl;
         img = m_image_resizer->execute(img, height, width);  // [1, H, W, 3] u8
+        std::cout << "[I2V DBG] preprocess: image_resizer done" << std::endl;
         img = m_image_processor->execute(img);               // [1, 3, H, W] f32 in [-1, 1]
+        std::cout << "[I2V DBG] preprocess: image_processor done" << std::endl;
 
         // Add frame dimension for VAE encoder input [B, C, F, H, W]
         const ov::Shape& s = img.get_shape();
         img.set_shape({s[0], s[1], 1, s[2], s[3]});
+        std::cout << "[I2V DBG] preprocess: done, output shape [" << s[0] << "," << s[1] << ",1," << s[2] << "," << s[3] << "]" << std::endl;
         return img;
     }
 
