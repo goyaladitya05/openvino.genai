@@ -509,16 +509,6 @@ class Text2VideoPipeline::LTXPipeline {
         return {std::make_shared<AutoencoderKLLTXVideo>(models_dir / "vae_decoder"), false};
     }
 
-    static std::pair<std::shared_ptr<AutoencoderKLLTXVideo>, bool> load_vae(
-            const std::filesystem::path& models_dir,
-            const std::string& device,
-            const ov::AnyMap& properties) {
-        const auto encoder_path = models_dir / "vae_encoder";
-        if (std::filesystem::exists(encoder_path)) {
-            return {std::make_shared<AutoencoderKLLTXVideo>(encoder_path, models_dir / "vae_decoder", device, properties), true};
-        }
-        return {std::make_shared<AutoencoderKLLTXVideo>(models_dir / "vae_decoder", device, properties), false};
-    }
 
 public:
     VideoGenerationConfig m_generation_config;
@@ -860,6 +850,8 @@ public:
             "Image-to-video generation requires a VAE encoder. "
             "The 'vae_encoder' directory was not found when the pipeline was loaded. "
             "Ensure the model directory contains a 'vae_encoder' subdirectory.");
+        OPENVINO_ASSERT(m_image_processor && m_image_resizer,
+            "Pipeline must be compiled before image-to-video generation. Call compile() first.");
 
         size_t requested_batch_size_multiplier =
             do_classifier_free_guidance(merged_generation_config.guidance_scale) ? 2 : 1;
