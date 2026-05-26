@@ -4,6 +4,7 @@
 #pragma once
 
 #include <cmath>
+#include <cstring>
 #include <fstream>
 #include <nlohmann/json.hpp>
 #include <numeric>
@@ -944,13 +945,10 @@ public:
                                                            transformer_temporal_patch_size);
 
         const size_t video_sequence_length = m_latent_num_frames * m_latent_height * m_latent_width;
-        std::vector<float> timesteps;
-        if (merged_generation_config.strength > 0.0f) {
-            m_scheduler->set_timesteps(video_sequence_length,
-                                       merged_generation_config.num_inference_steps,
-                                       merged_generation_config.strength);
-            timesteps = m_scheduler->get_float_timesteps();
-        }
+        m_scheduler->set_timesteps(video_sequence_length,
+                                   merged_generation_config.num_inference_steps,
+                                   merged_generation_config.strength);
+        std::vector<float> timesteps = m_scheduler->get_float_timesteps();
 
         ov::Tensor rope_interpolation_scale(ov::element::f32, {3});
         const float frame_rate =
@@ -967,8 +965,11 @@ public:
         latent_shape_cfg[0] *= batch_size_multiplier;
         ov::Tensor latent_cfg(ov::element::f32, latent_shape_cfg);
 
+        const size_t S = latent_shape_cfg[1];
+
         TaylorSeerState ts_state(merged_generation_config.taylorseer_config, timesteps.size());
 
+        ov::Tensor timestep;
         ov::Tensor noisy_residual_tensor(ov::element::f32, {});
         for (size_t inference_step = 0; inference_step < timesteps.size(); ++inference_step) {
             auto step_start = std::chrono::steady_clock::now();
@@ -989,16 +990,15 @@ public:
                 latent_cfg = numpy_utils::repeat(latent_cfg, request_input_batch / latent_cfg.get_shape()[0]);
             }
 
-            // Per-token 2D timestep: frame-0 tokens get t=0 (clean), rest get t=timestep
             const size_t B_cfg = latent_cfg.get_shape()[0];
-            const size_t S = latent_cfg.get_shape()[1];
-            ov::Tensor timestep(ov::element::f32, {B_cfg, S});
-            float* timestep_data = timestep.data<float>();
             const float t = timesteps[inference_step];
+            if (!timestep || timestep.get_shape()[0] != B_cfg) {
+                timestep = ov::Tensor(ov::element::f32, {B_cfg, S});
+                std::fill_n(timestep.data<float>(), B_cfg * T0, 0.0f);
+            }
+            float* timestep_data = timestep.data<float>();
             for (size_t b = 0; b < B_cfg; ++b) {
-                for (size_t s = 0; s < S; ++s) {
-                    timestep_data[b * S + s] = (s < T0) ? 0.0f : t;
-                }
+                std::fill_n(timestep_data + b * S + T0, S - T0, t);
             }
 
             ov::Tensor noise_pred_tensor;
@@ -1133,8 +1133,8 @@ public:
         m_is_compiled = true;
         m_compiled_batch_size_multiplier = m_reshape_batch_size_multiplier;
         if (m_has_encoder) {
-            m_image_processor = std::make_shared<ImageProcessor>("CPU");
-            m_image_resizer = std::make_shared<ImageResizer>("CPU", ov::element::u8, "NHWC", ov::op::v11::Interpolate::InterpolateMode::BICUBIC_PILLOW);
+            m_image_processor = std::make_shared<ImageProcessor>(vae_device);
+            m_image_resizer = std::make_shared<ImageResizer>(vae_device, ov::element::u8, "NHWC", ov::op::v11::Interpolate::InterpolateMode::BICUBIC_PILLOW);
         }
     }
 
