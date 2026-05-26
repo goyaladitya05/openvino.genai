@@ -961,8 +961,7 @@ public:
         rope_interpolation_scale.data<float>()[2] = spatial_compression_ratio;
         m_transformer->set_hidden_states("rope_interpolation_scale", rope_interpolation_scale);
 
-        ov::Tensor timestep(ov::element::f32, {1});
-        float* timestep_data = timestep.data<float>();
+        const size_t T0 = packed_frame0.get_shape()[1];
 
         ov::Shape latent_shape_cfg = latent.get_shape();
         latent_shape_cfg[0] *= batch_size_multiplier;
@@ -990,7 +989,17 @@ public:
                 latent_cfg = numpy_utils::repeat(latent_cfg, request_input_batch / latent_cfg.get_shape()[0]);
             }
 
-            timestep_data[0] = timesteps[inference_step];
+            // Per-token 2D timestep: frame-0 tokens get t=0 (clean), rest get t=timestep
+            const size_t B_cfg = latent_cfg.get_shape()[0];
+            const size_t S = latent_cfg.get_shape()[1];
+            ov::Tensor timestep(ov::element::f32, {B_cfg, S});
+            float* timestep_data = timestep.data<float>();
+            const float t = timesteps[inference_step];
+            for (size_t b = 0; b < B_cfg; ++b) {
+                for (size_t s = 0; s < S; ++s) {
+                    timestep_data[b * S + s] = (s < T0) ? 0.0f : t;
+                }
+            }
 
             ov::Tensor noise_pred_tensor;
             if (ts_state.is_active() && !ts_state.should_compute(inference_step)) {
