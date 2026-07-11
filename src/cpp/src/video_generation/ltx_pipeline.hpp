@@ -590,11 +590,15 @@ public:
                                             transformer_spatial_patch_size,
                                             transformer_temporal_patch_size);
 
-        // Prepare timesteps
+        // Prepare timesteps.
+        // LTX-Video's scheduler config sets time_shift_type="exponential" (the sigma transform), but diffusers
+        // computes the flow-match shift `mu` with the *linear* `calculate_shift`, not the empirical (Flux2) mu.
+        // Compute mu here and drive the scheduler via set_timesteps_with_mu so the sigma schedule matches diffusers.
         size_t video_sequence_length = m_latent_num_frames * m_latent_height * m_latent_width;
-        m_scheduler->set_timesteps(video_sequence_length,
-                                   merged_generation_config.num_inference_steps,
-                                   1.0f);
+        const double mu = m_scheduler->calculate_shift(video_sequence_length);
+        m_scheduler->set_timesteps_with_mu(mu,
+                                           merged_generation_config.num_inference_steps,
+                                           1.0f);
         std::vector<float> timesteps = m_scheduler->get_float_timesteps();
 
         // Prepare micro-conditions

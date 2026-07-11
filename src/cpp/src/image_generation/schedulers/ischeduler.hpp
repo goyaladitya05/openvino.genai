@@ -36,6 +36,13 @@ public:
         OPENVINO_THROW("Scheduler doesn't support `set_timesteps_with_mu` method");
     }
 
+    // Linear sequence-length-dependent shift (diffusers `calculate_shift`). Exposed so a pipeline whose
+    // scheduler config selects an exponential *sigma transform* but a *linear* mu (e.g. LTX-Video) can
+    // request the correct mu explicitly instead of inheriting the empirical (Flux2) formula.
+    virtual double calculate_shift(size_t image_seq_len) {
+        OPENVINO_THROW("Scheduler doesn't support `calculate_shift` method");
+    }
+
     virtual std::vector<std::int64_t> get_timesteps() const {
          OPENVINO_THROW("Scheduler doesn't support int timesteps");
     }
