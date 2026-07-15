@@ -51,6 +51,9 @@ public:
 
     void set_begin_index(size_t begin_index) override;
 
+    // Empirical mu fit used by Flux.2-Klein.
+    static double compute_empirical_mu(size_t image_seq_len, size_t num_inference_steps);
+
 private:
     Config m_config;
 
@@ -66,7 +69,6 @@ private:
     double sigma_to_t(double sigma);
     size_t _index_for_timestep(float timestep);
     double calculate_shift(size_t image_seq_len);
-    double compute_empirical_mu(const size_t image_seq_len, const size_t num_inference_steps);
 };
 
 } // namespace genai

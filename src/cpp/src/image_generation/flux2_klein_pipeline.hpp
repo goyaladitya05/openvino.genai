@@ -9,6 +9,7 @@
 #include "image_generation/diffusion_pipeline.hpp"
 #include "image_generation/flux_latent_utils.hpp"
 #include "image_generation/numpy_utils.hpp"
+#include "image_generation/schedulers/flow_match_euler_discrete.hpp"
 #include "image_generation/threaded_callback.hpp"
 
 #include "openvino/genai/image_generation/autoencoder_kl.hpp"
@@ -482,7 +483,10 @@ public:
         // - Image2Image: uses reference conditioning (image latents as extra tokens),
         //   not noise blending, so partial denoising is not applicable
         // Aligned with diffusers FluxPipeline which does not accept 'strength':
-        m_scheduler->set_timesteps(image_seq_len, m_custom_generation_config.num_inference_steps, 1.0f);
+        // Flux.2-Klein uses the empirical mu fit rather than calculate_shift.
+        const double mu = FlowMatchEulerDiscreteScheduler::compute_empirical_mu(
+            image_seq_len, m_custom_generation_config.num_inference_steps);
+        m_scheduler->set_timesteps_with_mu(mu, m_custom_generation_config.num_inference_steps, 1.0f);
 
         // Prepare timesteps
         std::vector<float> timesteps = m_scheduler->get_float_timesteps();
