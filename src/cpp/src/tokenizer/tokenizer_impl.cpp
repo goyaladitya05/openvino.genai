@@ -8,6 +8,7 @@
 #include "add_second_input_pass.hpp"
 #include "sampling/structured_output/structured_output_controller.hpp"
 #include "openvino/genai/version.hpp"
+#include "logger.hpp"
 
 namespace ov {
 namespace genai {
@@ -217,8 +218,10 @@ void Tokenizer::TokenizerImpl::set_state_if_necessary(CircularBufferQueueElement
 
     ov::AnyMap& state_flags = m_request_to_state_flags[&infer_request_guard.get()];
 
+    std::set<std::string> present_states;
     for (auto& state : infer_request_guard.get().query_state()) {
         auto name = state.get_name();
+        present_states.insert(name);
 
         if (name == add_special_tokens.name()) {
             set_state_value(state, add_special_tokens_flag, state_flags);
@@ -234,6 +237,24 @@ void Tokenizer::TokenizerImpl::set_state_if_necessary(CircularBufferQueueElement
             set_state_value(state, pad_right, state_flags);
         }
     }
+
+    // Never silently ignore an explicitly requested parameter the tokenizer graph can't honor
+    // (e.g. `max_length` on a SentencePiece-form tokenizer exported without a settable bound).
+    // pad_to_max_length is excluded: it is compensated downstream (t5_encoder_model.cpp) for such tokenizers.
+    const auto warn_if_unsupported = [&](const std::string& param_name, const std::string& var_id) {
+        if (params.find(param_name) == params.end() || present_states.count(var_id)) {
+            return;
+        }
+        std::lock_guard<std::mutex> lock(m_warned_unsupported_params_mutex);
+        if (m_warned_unsupported_params.insert(param_name).second) {
+            GENAI_WARN("Tokenization parameter '", param_name, "' was requested but this tokenizer does not support it "
+                       "at runtime and the value is ignored. The tokenizer was likely exported in a form without a "
+                       "settable '", param_name, "' (e.g. a slow SentencePiece export); re-export as a fast tokenizer.");
+        }
+    };
+    warn_if_unsupported(max_length.name(), MAX_LENGTH_VAR_ID);
+    warn_if_unsupported(truncation.name(), TRUNCATION_VAR_ID);
+    warn_if_unsupported(padding_side.name(), PAD_RIGHT_VAR_ID);
 }
 
 Tokenizer::TokenizerImpl::TokenizerImpl(const std::filesystem::path& models_path, const ov::AnyMap& properties) {

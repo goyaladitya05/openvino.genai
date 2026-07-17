@@ -5,6 +5,8 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <mutex>
+#include <set>
 
 #include "minja/minja.hpp"
 #include "minja/chat-template.hpp"
@@ -32,6 +34,9 @@ public:
     std::unique_ptr<CircularBufferQueue<ov::InferRequest>> m_ireq_queue_tokenizer;
     std::unique_ptr<CircularBufferQueue<ov::InferRequest>> m_ireq_queue_detokenizer;
     std::unordered_map<ov::InferRequest*, ov::AnyMap> m_request_to_state_flags;
+    // Tracks tokenization params already warned about being silently unsupported (see set_state_if_necessary).
+    std::set<std::string> m_warned_unsupported_params;
+    std::mutex m_warned_unsupported_params_mutex;
     std::shared_ptr<void> m_shared_object_ov_tokenizers = nullptr;
     bool is_paired_input = false;
     bool m_older_than_24_5 = false;

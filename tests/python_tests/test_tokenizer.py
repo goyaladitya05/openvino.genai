@@ -531,6 +531,51 @@ def test_truncation_disabled_by_default(hf_ov_genai_models):
     assert ov_truncated_res.input_ids.data.shape[1] == max_length
 
 
+def _build_sentencepiece_genai_tokenizer(tmp_path, baked_max_length):
+    """Build a genai Tokenizer from a slow SentencePiece tokenizer (Slice-based truncation, no CombineSegments)."""
+    from openvino import save_model
+    from utils.constants import OV_TOKENIZER_FILENAME
+
+    model_cached = snapshot_download("optimum-intel-internal-testing/mt5-tiny-random")
+    hf_tokenizer = AutoTokenizer.from_pretrained(model_cached, use_fast=False)
+    assert not hf_tokenizer.is_fast, "test requires a slow SentencePiece tokenizer"
+    hf_tokenizer.model_max_length = baked_max_length
+
+    ov_tokenizer, _ = convert_tokenizer(hf_tokenizer, with_detokenizer=True)
+    op_types = {op.get_type_name() for op in ov_tokenizer.get_ops()}
+    assert "SentencepieceTokenizer" in op_types and "CombineSegments" not in op_types, (
+        "expected SentencePiece-form export"
+    )
+
+    save_model(ov_tokenizer, tmp_path / OV_TOKENIZER_FILENAME)
+    return hf_tokenizer, Tokenizer(tmp_path)
+
+
+def test_sentencepiece_max_length_settable(tmp_path):
+    # SentencePiece-form tokenizers bake truncation into a constant Slice, so a runtime max_length used
+    # to be silently ignored (capping prompts at model_max_length). MakePaddingSatateful now makes the
+    # bound settable: the default stays the baked value, but max_length above it is honored.
+    baked = 128
+    hf_tokenizer, genai_tokenizer = _build_sentencepiece_genai_tokenizer(tmp_path, baked)
+    long_prompt = "translate English to German: this is a sentence to tokenize. " * 50
+
+    # Default behavior is unchanged: still capped at the baked model_max_length.
+    default_res = genai_tokenizer.encode(long_prompt)
+    assert default_res.input_ids.data.shape[1] == baked
+
+    # A runtime max_length ABOVE the baked value is now honored (was capped at 128 before the fix).
+    res = genai_tokenizer.encode(long_prompt, max_length=2 * baked)
+    assert res.input_ids.data.shape[1] == 2 * baked
+    # input_ids and attention_mask stay the same length after patching both slices.
+    assert res.input_ids.data.shape == res.attention_mask.data.shape
+
+    # Below the cap no truncation fires, so output matches HF exactly.
+    short_prompt = "a short sentence"
+    short_res = genai_tokenizer.encode(short_prompt, max_length=2 * baked)
+    hf_short = hf_tokenizer(short_prompt, return_tensors="np")
+    assert np.all(short_res.input_ids.data == hf_short["input_ids"])
+
+
 # Define model base configs
 base_models_for_paired_input_test = [
     ("answerdotai/ModernBERT-base", {"padding_side": None}),

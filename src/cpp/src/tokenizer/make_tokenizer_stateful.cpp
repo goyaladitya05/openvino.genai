@@ -10,6 +10,7 @@
 #include "openvino/op/subtract.hpp"
 #include "openvino/op/slice.hpp"
 #include "openvino/op/multiply.hpp"
+#include "openvino/op/convert.hpp"
 #include "openvino/op/read_value.hpp"
 #include "openvino/op/assign.hpp"
 #include "openvino/op/constant.hpp"
@@ -127,6 +128,106 @@ public:
     }
 };
 
+namespace {
+
+// Walk back from a named model output (input_ids / attention_mask) to the Slice that
+// truncates it. The SentencePiece backend emits: ... -> Slice -> Convert -> Result.
+std::shared_ptr<v8::Slice> find_truncation_slice(const std::shared_ptr<ov::Model>& model, const std::string& output_name) {
+    for (const auto& output : model->outputs()) {
+        if (output.get_names().count(output_name) == 0) {
+            continue;
+        }
+        auto node = output.get_node_shared_ptr();
+        for (int hop = 0; hop < 6 && node; ++hop) {
+            if (auto slice = ov::as_type_ptr<v8::Slice>(node)) {
+                return slice;
+            }
+            if (node->get_input_size() == 0) {
+                break;
+            }
+            node = node->get_input_node_shared_ptr(0);
+        }
+    }
+    return nullptr;
+}
+
+// SentencePiece-form tokenizers have no CombineSegments; truncation is a constant Slice on
+// the already-assembled dense tensor (hf_parser.py convert_sentencepiece_model_tokenizer):
+//   right padding: start=[0],           stop=[max_length]
+//   left  padding: start=[-max_length], stop=[INT_MAX]
+// MakePaddingSatateful can't hook that, so max_length is silently ignored. Make only the
+// truncation bound settable via MAX_LENGTH_VAR_ID; default stays the baked model_max_length,
+// so behavior is unchanged unless the caller sets max_length. No TRUNCATION_VAR_ID here:
+// set_state_if_necessary forces truncation=false by default, which would drop the baked cap.
+bool make_sp_truncation_stateful(const std::shared_ptr<ov::Model>& model) {
+    auto ids_slice = find_truncation_slice(model, "input_ids");
+    auto mask_slice = find_truncation_slice(model, "attention_mask");
+    std::vector<std::shared_ptr<v8::Slice>> slices;
+    if (ids_slice) {
+        slices.push_back(ids_slice);
+    }
+    if (mask_slice && mask_slice != ids_slice) {
+        slices.push_back(mask_slice);
+    }
+    if (slices.empty()) {
+        return false;
+    }
+
+    auto start_const = ov::as_type_ptr<v0::Constant>(slices[0]->get_input_node_shared_ptr(1));
+    auto stop_const = ov::as_type_ptr<v0::Constant>(slices[0]->get_input_node_shared_ptr(2));
+    if (!start_const || !stop_const) {
+        return false;
+    }
+    const int64_t start_v = start_const->cast_vector<int64_t>().at(0);
+    const int64_t stop_v = stop_const->cast_vector<int64_t>().at(0);
+
+    // Right padding truncates via stop (input 2); left padding via a negative start (input 1).
+    bool right_padding;
+    size_t bound_input;
+    int64_t baked_max_length;
+    std::shared_ptr<v0::Constant> bound_const;
+    if (start_v == 0 && stop_v > 0 && stop_v < std::numeric_limits<int32_t>::max()) {
+        right_padding = true;
+        bound_input = 2;
+        baked_max_length = stop_v;
+        bound_const = stop_const;
+    } else if (start_v < 0) {
+        right_padding = false;
+        bound_input = 1;
+        baked_max_length = -start_v;
+        bound_const = start_const;
+    } else {
+        return false;  // unrecognized truncation form, leave untouched
+    }
+
+    // The state must be i32: set_state_value writes an i32 tensor for max_length, and the CPU
+    // plugin does not support an i64 ReadValue. Convert to the Slice bound's element type afterwards.
+    const auto bound_type = bound_const->get_output_element_type(0);
+    const auto eshape = bound_const->get_output_shape(0);
+    op::util::VariableInfo var_info{eshape, ov::element::i32, ov::genai::MAX_LENGTH_VAR_ID};
+    auto max_length_var = std::make_shared<op::util::Variable>(var_info);
+    auto default_const =
+        std::make_shared<v0::Constant>(ov::element::i32, eshape, std::vector<int32_t>{static_cast<int32_t>(baked_max_length)});
+    auto max_length_rv = std::make_shared<v6::ReadValue>(default_const, max_length_var);
+    model->add_sinks({std::make_shared<v6::Assign>(max_length_rv, max_length_var)});
+    model->add_variables({max_length_var});
+
+    std::shared_ptr<ov::Node> bound = max_length_rv;
+    if (!right_padding) {
+        auto minus_one = std::make_shared<v0::Constant>(ov::element::i32, eshape, std::vector<int32_t>{-1});
+        bound = std::make_shared<v1::Multiply>(bound, minus_one);
+    }
+    if (bound_type != ov::element::i32) {
+        bound = std::make_shared<v0::Convert>(bound, bound_type);
+    }
+    for (const auto& slice : slices) {
+        slice->input(bound_input).replace_source_output(bound->output(0));
+    }
+    return true;
+}
+
+}  // namespace
+
 bool ov::genai::MakePaddingSatateful::run_on_model(const std::shared_ptr<ov::Model>& model) {
     std::shared_ptr<ov::Node> combine_seg_node;
     for (auto node: model->get_ordered_ops()) {
@@ -134,7 +235,7 @@ bool ov::genai::MakePaddingSatateful::run_on_model(const std::shared_ptr<ov::Mod
             combine_seg_node = node;
         }
     }
-    if (!combine_seg_node) { return false; }
+    if (!combine_seg_node) { return make_sp_truncation_stateful(model); }
     auto num_comb = combine_seg_node->get_input_size();
     
     size_t num_segments = (combine_seg_node->get_input_size() - 1) / 3;
