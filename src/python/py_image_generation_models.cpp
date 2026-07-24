@@ -18,6 +18,7 @@
 #include "openvino/genai/image_generation/flux_transformer_2d_model.hpp"
 #include "openvino/genai/image_generation/flux2_transformer_2d_model.hpp"
 #include "openvino/genai/image_generation/qwen3_text_encoder.hpp"
+#include "openvino/genai/image_generation/gemma3_text_encoder_model.hpp"
 
 #include "tokenizer/tokenizers_path.hpp"
 #include "py_utils.hpp"
@@ -397,6 +398,65 @@ void init_t5_encoder_model(py::module_& m) {
                 device (str): Device to run the model on (e.g., CPU, GPU).
                 kwargs: Device properties.
             )");
+}
+
+void init_gemma3_text_encoder_model(py::module_& m) {
+    py::class_<ov::genai::Gemma3TextEncoderModel>(m, "Gemma3TextEncoderModel", "Gemma3-based text encoder used by LTX2.")
+        .def(py::init([](const std::filesystem::path& root_dir) {
+                 ScopedVar env_manager(pyutils::ov_tokenizers_module_path());
+                 return std::make_unique<ov::genai::Gemma3TextEncoderModel>(root_dir);
+             }),
+             py::arg("root_dir"),
+             R"(
+                Gemma3TextEncoderModel class constructor.
+                root_dir (os.PathLike): Model root directory.
+            )")
+        .def(py::init([](const std::filesystem::path& root_dir, const std::string& device, const py::kwargs& kwargs) {
+                 ScopedVar env_manager(pyutils::ov_tokenizers_module_path());
+                 return std::make_unique<ov::genai::Gemma3TextEncoderModel>(root_dir, device, pyutils::kwargs_to_any_map(kwargs));
+             }),
+             py::arg("root_dir"),
+             py::arg("device"),
+             R"(
+                Gemma3TextEncoderModel class constructor.
+                root_dir (os.PathLike): Model root directory.
+                device (str): Device on which inference will be done.
+                kwargs: Device properties.
+            )")
+        .def(py::init([](const ov::genai::Gemma3TextEncoderModel& model) {
+                 return std::make_unique<ov::genai::Gemma3TextEncoderModel>(model);
+             }),
+             py::arg("model"))
+        .def("reshape", &ov::genai::Gemma3TextEncoderModel::reshape, py::arg("batch_size"), py::arg("max_sequence_length"))
+        .def(
+            "compile",
+            [](ov::genai::Gemma3TextEncoderModel& self, const std::string& device, const py::kwargs& kwargs) {
+                auto properties = pyutils::kwargs_to_any_map(kwargs);
+                py::gil_scoped_release rel;
+                self.compile(device, properties);
+            },
+            py::arg("device"))
+        .def(
+            "infer",
+            [](ov::genai::Gemma3TextEncoderModel& self,
+               const std::string& pos_prompt,
+               const std::string& neg_prompt,
+               bool do_classifier_free_guidance,
+               int max_sequence_length,
+               const py::kwargs& kwargs) {
+                ov::AnyMap tokenization_params = pyutils::kwargs_to_any_map(kwargs);
+                py::gil_scoped_release rel;
+                return self.infer(pos_prompt, neg_prompt, do_classifier_free_guidance, max_sequence_length, tokenization_params);
+            },
+            py::arg("pos_prompt"),
+            py::arg("neg_prompt"),
+            py::arg("do_classifier_free_guidance"),
+            py::arg("max_sequence_length"),
+            R"(
+                Tokenizes and encodes the prompt(s), returning the concatenation of intermediate
+                hidden-state layers as required by LTX2's connectors module.
+            )")
+        .def("get_prompt_attention_mask", &ov::genai::Gemma3TextEncoderModel::get_prompt_attention_mask);
 }
 
 void init_unet2d_condition_model(py::module_& m) {
