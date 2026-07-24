@@ -495,6 +495,17 @@ public:
         ov::Tensor audio_text_embedding = numpy_utils::repeat(connector_output.audio_text_embedding, B);
         ov::Tensor connector_attention_mask = numpy_utils::repeat(connector_output.connector_attention_mask, B);
 
+        // The transformer's video-side mask input is i64 (matches connector_attention_mask's own
+        // element type), but the audio-side mask input is f32 - convert once, outside the loop.
+        ov::Tensor audio_encoder_attention_mask(ov::element::f32, connector_attention_mask.get_shape());
+        {
+            const int64_t* src = connector_attention_mask.data<const int64_t>();
+            float* dst = audio_encoder_attention_mask.data<float>();
+            for (size_t i = 0; i < connector_attention_mask.get_size(); ++i) {
+                dst[i] = static_cast<float>(src[i]);
+            }
+        }
+
         // 2. Prepare video and audio latents
         OPENVINO_ASSERT(config.generator, "Generator must not be null");
         ov::Shape video_noise_shape{B, static_cast<size_t>(t_config.in_channels),
@@ -561,12 +572,6 @@ public:
             ov::Tensor timestep(ov::element::f32, {B * batch_size_multiplier});
             std::fill_n(timestep.data<float>(), timestep.get_size(), timesteps[i]);
 
-            ov::Tensor encoder_attention_mask_i64(ov::element::i64, connector_attention_mask.get_shape());
-            {
-                // 'connector_attention_mask' output is already i64; reuse directly for encoder_attention_mask.
-                connector_attention_mask.copy_to(encoder_attention_mask_i64);
-            }
-
             infer_start = std::chrono::steady_clock::now();
             LTX2VideoTransformer3DModel::Output transformer_output =
                 m_transformer->infer(latent_model_input,
@@ -574,8 +579,8 @@ public:
                                      video_text_embedding,
                                      audio_text_embedding,
                                      timestep,
-                                     encoder_attention_mask_i64,
                                      connector_attention_mask,
+                                     audio_encoder_attention_mask,
                                      static_cast<size_t>(latent_num_frames),
                                      static_cast<size_t>(latent_height),
                                      static_cast<size_t>(latent_width),
