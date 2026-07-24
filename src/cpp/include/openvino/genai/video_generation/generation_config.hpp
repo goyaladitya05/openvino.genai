@@ -66,6 +66,14 @@ struct VideoGenerationConfig {
 
     /// LoRA adapters applied during generation.
     std::optional<AdapterConfig> adapters = std::nullopt;
+
+    /// Guidance scale used for the audio stream. Only applicable to models that generate synchronized
+    /// audio (e.g. LTX2). std::nullopt corresponds to falling back to 'guidance_scale'.
+    std::optional<float> audio_guidance_scale = std::nullopt;
+    /// Guidance rescale factor for the audio stream, analogous to 'guidance_rescale' for video.
+    /// Only applicable to models that generate synchronized audio (e.g. LTX2). std::nullopt
+    /// corresponds to falling back to 'guidance_rescale'.
+    std::optional<float> audio_guidance_rescale = std::nullopt;
 };
 
 /**
@@ -91,6 +99,11 @@ static constexpr ov::Property<float> guidance_rescale{"guidance_rescale"};
 static constexpr ov::Property<size_t> num_frames{"num_frames"};
 /// Video frame rate.
 static constexpr ov::Property<float> frame_rate{"frame_rate"};
+
+/// Guidance scale for the audio stream (models that generate synchronized audio, e.g. LTX2).
+static constexpr ov::Property<float> audio_guidance_scale{"audio_guidance_scale"};
+/// Guidance rescale factor for the audio stream (models that generate synchronized audio, e.g. LTX2).
+static constexpr ov::Property<float> audio_guidance_rescale{"audio_guidance_rescale"};
 
 /**
  * Function to pass 'VideoGenerationConfig' as property to 'generate()' call.

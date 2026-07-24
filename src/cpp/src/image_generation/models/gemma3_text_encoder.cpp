@@ -20,7 +20,7 @@ namespace {
 // Discovers the model's 'hidden_states.N' outputs (N = 0, 1, ..., num_hidden_layers), in order.
 // LTX2's text encoder is exported with output_hidden_states=True, so every hidden-state layer
 // (embeddings + each transformer layer) is exposed as a separate named output.
-std::vector<std::string> discover_hidden_state_outputs(const std::vector<ov::Output<const ov::Node>>& outputs) {
+std::vector<std::string> discover_hidden_state_outputs(const std::vector<ov::Output<ov::Node>>& outputs) {
     std::vector<std::pair<size_t, std::string>> indexed_names;
     const std::regex hidden_state_pattern(R"(hidden_states\.(\d+))");
 
