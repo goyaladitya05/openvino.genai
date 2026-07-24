@@ -38,7 +38,8 @@ void init_video_generation_pipelines(py::module_& m) {
 
     py::class_<ov::genai::VideoGenerationResult>(m, "VideoGenerationResult")
         .def_readonly("video", &ov::genai::VideoGenerationResult::video)
-        .def_readonly("perf_metrics", &ov::genai::VideoGenerationResult::performance_stat);
+        .def_readonly("perf_metrics", &ov::genai::VideoGenerationResult::performance_stat)
+        .def_readonly("audio", &ov::genai::VideoGenerationResult::audio);
 
     py::class_<ov::genai::Text2VideoPipeline>(m, "Text2VideoPipeline")
         .def(py::init([](const std::filesystem::path& models_path) {

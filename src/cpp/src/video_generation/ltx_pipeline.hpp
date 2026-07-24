@@ -28,21 +28,17 @@
 #include "diffusion_caching/taylorseer_lite.hpp"
 #include "lora/helper.hpp"
 #include "logger.hpp"
+#include "openvino/genai/image_generation/t5_encoder_model.hpp"
+#include "openvino/genai/video_generation/autoencoder_kl_ltx_video.hpp"
 #include "openvino/genai/video_generation/ltx_video_transformer_3d_model.hpp"
 #include "generation_config_utils.hpp"
+#include "video_generation/video_pipeline.hpp"
 
 #include "utils.hpp"
 
 using namespace ov::genai;
 
 namespace {
-
-std::string get_class_name(const std::filesystem::path& root_dir) {
-    const std::filesystem::path model_index_path = root_dir / "model_index.json";
-    std::ifstream file(model_index_path);
-    OPENVINO_ASSERT(file.is_open(), "Failed to open ", model_index_path);
-    return nlohmann::json::parse(file)["_class_name"].get<std::string>();
-}
 
 const VideoGenerationConfig LTX_VIDEO_DEFAULT_CONFIG = VideoGenerationConfig{
     std::nullopt,            // negative_prompt
@@ -298,20 +294,11 @@ inline ov::Tensor tensor_from_vector(const std::vector<float>& data) {
 
 namespace ov::genai {
 
-enum class VideoPipelineType {
-    TEXT_2_VIDEO = 0,
-    IMAGE_2_VIDEO = 1,
-};
-
-class LTXPipeline {
-    using Ms = std::chrono::duration<float, std::ratio<1, 1000>>;
-
+class LTXPipeline : public VideoPipeline {
     std::shared_ptr<IScheduler> m_scheduler;
     std::shared_ptr<T5EncoderModel> m_t5_text_encoder;
     std::shared_ptr<LTXVideoTransformer3DModel> m_transformer;
     std::shared_ptr<AutoencoderKLLTXVideo> m_vae;
-    VideoGenerationPerfMetrics m_perf_metrics;
-    Ms m_load_time;
 
     size_t m_latent_num_frames = 0;
     size_t m_latent_height = 0;
@@ -476,7 +463,8 @@ class LTXPipeline {
                                       ov::genai::add_special_tokens(true)});
 
         auto infer_end = std::chrono::steady_clock::now();
-        m_perf_metrics.encoder_inference_duration["text_encoder"] = Ms{infer_end - infer_start}.count();
+        m_perf_metrics.encoder_inference_duration["text_encoder"] =
+            std::chrono::duration<float, std::milli>{infer_end - infer_start}.count();
 
         ov::Tensor prompt_attention_mask = m_t5_text_encoder->get_prompt_attention_mask();
 
@@ -497,15 +485,7 @@ class LTXPipeline {
     }
 
 public:
-    VideoGenerationConfig m_generation_config;
-
-    VideoGenerationPerfMetrics get_performance_metrics() const {
-        return m_perf_metrics;
-    }
-
-    LTXPipeline(VideoPipelineType pipeline_type,
-                const std::filesystem::path& root_dir,
-                std::chrono::steady_clock::time_point start_time = std::chrono::steady_clock::now()) {
+    LTXPipeline(VideoPipelineType pipeline_type, const std::filesystem::path& root_dir) {
         m_models_dir = root_dir;
         const std::filesystem::path model_index_path = root_dir / "model_index.json";
 
@@ -550,20 +530,17 @@ public:
                 ov::op::v11::Interpolate::InterpolateMode::BICUBIC_PILLOW);
             m_image_processor = std::make_shared<ImageProcessor>("CPU", true);
         }
-
-        m_load_time = Ms{std::chrono::steady_clock::now() - start_time};
     }
 
     LTXPipeline(VideoPipelineType pipeline_type,
                 const std::filesystem::path& models_dir,
                 const std::string& device,
-                const ov::AnyMap& properties,
-                std::chrono::steady_clock::time_point start_time = std::chrono::steady_clock::now())
+                const ov::AnyMap& properties)
         : m_scheduler{cast_scheduler(Scheduler::from_config(models_dir / "scheduler/scheduler_config.json"))},
           m_t5_text_encoder{std::make_shared<T5EncoderModel>(models_dir / "text_encoder", device, properties)},
           m_transformer{std::make_shared<LTXVideoTransformer3DModel>(models_dir / "transformer", device, properties)},
-          m_generation_config{LTX_VIDEO_DEFAULT_CONFIG},
           m_pipeline_type{pipeline_type} {
+        m_generation_config = LTX_VIDEO_DEFAULT_CONFIG;
         if (pipeline_type == VideoPipelineType::IMAGE_2_VIDEO) {
             m_vae = std::make_shared<AutoencoderKLLTXVideo>(
                 models_dir / "vae_encoder", models_dir / "vae_decoder", device, properties);
@@ -581,14 +558,11 @@ public:
         m_compile_properties = properties;
         m_is_compiled = true;
         update_adapters_from_properties(properties, m_generation_config.adapters);
-        m_load_time = Ms{std::chrono::steady_clock::now() - start_time};
     }
 
-    template<typename T = LTXPipeline>
-    std::unique_ptr<T> clone() {
-        static_assert(std::is_base_of_v<LTXPipeline, T>, "T must derive from LTXPipeline");
+    std::shared_ptr<VideoPipeline> clone() override {
         OPENVINO_ASSERT(m_is_compiled, "Cannot clone an uncompiled LTXPipeline");
-        auto cloned = std::make_unique<T>(static_cast<const LTXPipeline&>(*this));
+        auto cloned = std::make_shared<LTXPipeline>(*this);
         cloned->m_generation_config.generator.reset();
         cloned->m_scheduler = cast_scheduler(Scheduler::from_config(m_models_dir / "scheduler/scheduler_config.json"));
         cloned->m_t5_text_encoder = m_t5_text_encoder->clone();
@@ -1111,7 +1085,16 @@ public:
         return VideoGenerationResult{video, m_perf_metrics};
     }
 
-    VideoGenerationResult decode(const ov::Tensor& latent) {
+    VideoGenerationResult generate(const std::string& positive_prompt,
+                                   const ov::Tensor& initial_image,
+                                   const ov::AnyMap& properties) override {
+        if (m_pipeline_type == VideoPipelineType::IMAGE_2_VIDEO) {
+            return generate(initial_image, positive_prompt, properties);
+        }
+        return generate(positive_prompt, properties);
+    }
+
+    VideoGenerationResult decode(const ov::Tensor& latent) override {
         ov::Tensor postprocessed = postprocess_latents(latent);
 
         const auto decode_start = std::chrono::steady_clock::now();
@@ -1127,7 +1110,7 @@ public:
                  int64_t num_frames,
                  int64_t height,
                  int64_t width,
-                 float guidance_scale) {
+                 float guidance_scale) override {
         check_video_size(height, width);
 
         VideoGenerationConfig reshaped_config = m_generation_config;
@@ -1141,14 +1124,10 @@ public:
         reshape_models(reshaped_config, batch_size_multiplier);
     }
 
-    void save_load_time(std::chrono::steady_clock::time_point start_time) {
-        m_load_time += Ms{std::chrono::steady_clock::now() - start_time};
-    }
-
     void compile(const std::string& text_encode_device,
                  const std::string& denoise_device,
                  const std::string& vae_device,
-                 const ov::AnyMap& properties) {
+                 const ov::AnyMap& properties) override {
         update_adapters_from_properties(properties, m_generation_config.adapters);
         m_t5_text_encoder->compile(text_encode_device, properties);
         m_vae->compile(vae_device, properties);
@@ -1168,8 +1147,9 @@ public:
         m_compiled_batch_size_multiplier = m_reshape_batch_size_multiplier;
     }
 
-    void compile(const std::string& device, const ov::AnyMap& properties) {
-        compile(device, device, device, properties);
+protected:
+    void replace_config_defaults(VideoGenerationConfig& config) const override {
+        replace_defaults(config);
     }
 
 private:
@@ -1189,18 +1169,3 @@ private:
 };
 
 }  // namespace ov::genai
-
-#include "openvino/genai/video_generation/text2video_pipeline.hpp"
-#include "openvino/genai/video_generation/image2video_pipeline.hpp"
-
-class ov::genai::Text2VideoPipeline::Impl final : public ov::genai::LTXPipeline {
-public:
-    using LTXPipeline::LTXPipeline;
-    explicit Impl(const LTXPipeline& base) : LTXPipeline(base) {}
-};
-
-class ov::genai::Image2VideoPipeline::Impl final : public ov::genai::LTXPipeline {
-public:
-    using LTXPipeline::LTXPipeline;
-    explicit Impl(const LTXPipeline& base) : LTXPipeline(base) {}
-};

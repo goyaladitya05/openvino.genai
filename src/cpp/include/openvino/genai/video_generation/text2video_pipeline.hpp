@@ -7,18 +7,19 @@
 
 #include "openvino/genai/video_generation/generation_config.hpp"
 #include "openvino/genai/image_generation/image_generation_perf_metrics.hpp"
-#include "openvino/genai/image_generation/scheduler.hpp"
-#include "openvino/genai/image_generation/t5_encoder_model.hpp"
-#include "openvino/genai/video_generation/autoencoder_kl_ltx_video.hpp"
-#include "openvino/genai/video_generation/ltx_video_transformer_3d_model.hpp"
 
 namespace ov::genai {
+
+class VideoPipeline;
 
 struct VideoGenerationPerfMetrics : public ImageGenerationPerfMetrics {};
 
 struct VideoGenerationResult {
     ov::Tensor video;
     ov::genai::VideoGenerationPerfMetrics performance_stat;
+    /// Generated audio waveform, populated only by pipelines that generate synchronized
+    /// audio (e.g. LTX2). Empty for video-only pipelines (e.g. LTX-Video).
+    ov::Tensor audio;
 };
 
 class OPENVINO_GENAI_EXPORTS Text2VideoPipeline {
@@ -49,18 +50,6 @@ public:
                        const std::string& device,
                        Properties&&... properties)
         : Text2VideoPipeline(models_path, device, ov::AnyMap{std::forward<Properties>(properties)...}) { }
-
-    /**
-     * Creates LTX pipeline from individual models
-     * @param scheduler A scheduler used to denoise final image
-     * @param t5_text_encoder A T5 text encoder model
-     * @param transformer A Transformer denoising model
-     * @param vae VAE auto encoder model
-     */
-    static Text2VideoPipeline ltx_video(std::shared_ptr<Scheduler> m_scheduler,
-                                        const T5EncoderModel& m_t5_text_encoder,
-                                        const LTXVideoTransformer3DModel& m_transformer,
-                                        const AutoencoderKLLTXVideo& m_vae);
 
     /**
      * Method to clone the pipeline to be used in parallel by another thread.
@@ -180,10 +169,9 @@ public:
     ~Text2VideoPipeline();
 
 private:
-    class Impl;
-    std::unique_ptr<Impl> m_impl;
+    std::shared_ptr<VideoPipeline> m_impl;
 
-    explicit Text2VideoPipeline(std::unique_ptr<Impl> impl);
+    explicit Text2VideoPipeline(const std::shared_ptr<VideoPipeline>& impl);
 };
 
 }  // namespace ov::genai
