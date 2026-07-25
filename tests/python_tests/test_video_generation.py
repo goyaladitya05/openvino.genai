@@ -25,13 +25,15 @@ logger = logging.getLogger(__name__)
 MODEL_ID = "tiny-random-ltx-video"
 MODEL_NAME = "optimum-intel-internal-testing/tiny-random-ltx-video"
 
+LTX2_MODEL_ID = "tiny-random-ltx2"
+LTX2_MODEL_NAME = "optimum-intel-internal-testing/tiny-random-ltx2"
 
-@pytest.fixture(scope="module")
-def video_generation_model() -> str:
-    use_optimum_master = MODEL_ID in MODELS_REQUIRING_OPTIMUM_MASTER
+
+def _convert_video_model(model_id: str, model_name: str) -> str:
+    use_optimum_master = model_id in MODELS_REQUIRING_OPTIMUM_MASTER
 
     models_dir = get_ov_cache_converted_models_dir()
-    model_path = Path(models_dir) / MODEL_ID / MODEL_NAME
+    model_path = Path(models_dir) / model_id / model_name
     # Avoid colliding with a stale pinned (rank-1 timestep) export at the same path.
     if use_optimum_master:
         model_path = model_path.parent / f"{model_path.name}-optimum-master"
@@ -47,7 +49,7 @@ def video_generation_model() -> str:
             "export",
             "openvino",
             "--model",
-            MODEL_NAME,
+            model_name,
             "--trust-remote-code",
             str(temp_path),
         ]
@@ -65,6 +67,16 @@ def video_generation_model() -> str:
         raise
 
     return str(model_path)
+
+
+@pytest.fixture(scope="module")
+def video_generation_model() -> str:
+    return _convert_video_model(MODEL_ID, MODEL_NAME)
+
+
+@pytest.fixture(scope="module")
+def ltx2_video_generation_model() -> str:
+    return _convert_video_model(LTX2_MODEL_ID, LTX2_MODEL_NAME)
 
 
 class TestVideoGenerationConfig:
@@ -625,3 +637,77 @@ class TestImage2VideoPipeline:
         image = self._make_image()
         result = pipe.generate(image, "test prompt", **self.GENERATE_KWARGS, adapters=adapter_config)
         assert result.video is not None
+
+
+class TestLTX2Text2VideoPipeline:
+    """Text-to-audio-video generation via LTX2, dispatched through Text2VideoPipeline based on
+    model_index.json's '_class_name' (see src/cpp/src/video_generation/text2video_pipeline.cpp)."""
+
+    GENERATE_KWARGS = dict(height=32, width=32, num_frames=9, num_inference_steps=2)
+
+    def test_constructor(self, ltx2_video_generation_model):
+        pipe = ov_genai.Text2VideoPipeline(ltx2_video_generation_model, "CPU")
+        assert pipe is not None
+
+    def test_generate_runs(self, ltx2_video_generation_model):
+        pipe = ov_genai.Text2VideoPipeline(ltx2_video_generation_model, "CPU")
+        result = pipe.generate("a cat playing piano", **self.GENERATE_KWARGS)
+        assert result is not None
+        assert result.video is not None
+        assert result.audio is not None
+
+        video = np.array(result.video)
+        assert video.shape == (1, 9, 32, 32, 3)
+        # Audio is [num_videos_per_prompt, num_channels, num_samples]; LTX-Video's result.audio
+        # stays empty (see TestVideoGenerationResult), LTX2's should be populated.
+        audio = np.array(result.audio)
+        assert audio.shape[0] == 1
+        assert audio.shape[1] == 2
+        assert audio.shape[2] > 0
+
+    def test_generate_without_cfg(self, ltx2_video_generation_model):
+        pipe = ov_genai.Text2VideoPipeline(ltx2_video_generation_model, "CPU")
+        result = pipe.generate("a cat playing piano", **self.GENERATE_KWARGS, guidance_scale=1.0)
+        assert result.video is not None
+        assert result.audio is not None
+
+    def test_generate_with_negative_prompt_and_rescale(self, ltx2_video_generation_model):
+        pipe = ov_genai.Text2VideoPipeline(ltx2_video_generation_model, "CPU")
+        result = pipe.generate(
+            "a cat playing piano",
+            **self.GENERATE_KWARGS,
+            negative_prompt="blurry",
+            guidance_scale=3.0,
+            guidance_rescale=0.3,
+            audio_guidance_scale=2.0,
+            audio_guidance_rescale=0.3,
+        )
+        assert result.video is not None
+        assert result.audio is not None
+
+    def test_determinism(self, ltx2_video_generation_model):
+        pipe = ov_genai.Text2VideoPipeline(ltx2_video_generation_model, "CPU")
+        result1 = pipe.generate("a fox", **self.GENERATE_KWARGS, generator=ov_genai.CppStdGenerator(42))
+        result2 = pipe.generate("a fox", **self.GENERATE_KWARGS, generator=ov_genai.CppStdGenerator(42))
+        np.testing.assert_array_equal(np.array(result1.video), np.array(result2.video))
+        np.testing.assert_array_equal(np.array(result1.audio), np.array(result2.audio))
+
+    def test_generate_with_callback(self, ltx2_video_generation_model):
+        pipe = ov_genai.Text2VideoPipeline(ltx2_video_generation_model, "CPU")
+
+        callback_calls = []
+
+        def callback(step, num_steps, latent):
+            callback_calls.append((step, num_steps))
+            return False
+
+        result = pipe.generate("a cat playing piano", **self.GENERATE_KWARGS, callback=callback)
+
+        assert result.video is not None
+        assert len(callback_calls) == 2
+        assert callback_calls[0] == (0, 2)
+        assert callback_calls[1] == (1, 2)
+
+    def test_image2video_rejects_ltx2_model(self, ltx2_video_generation_model):
+        with pytest.raises(RuntimeError, match="LTX-Video"):
+            ov_genai.Image2VideoPipeline(ltx2_video_generation_model, "CPU")
