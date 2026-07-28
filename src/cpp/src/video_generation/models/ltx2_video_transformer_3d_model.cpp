@@ -172,8 +172,8 @@ LTX2VideoTransformer3DModel& LTX2VideoTransformer3DModel::reshape(int64_t batch_
     OPENVINO_ASSERT(m_model, "Model has been already compiled. Cannot reshape already compiled model");
 
     // Scalar (rank-0) micro-condition inputs are left untouched; everything else gets its batch
-    // dimension fixed and the rest left dynamic. Mirrors optimum-intel's own
-    // OVLTX2Pipeline._reshape_transformer, which reshapes the exported model the same way.
+    // dimension fixed and the rest left dynamic, matching optimum-intel's
+    // OVLTX2Pipeline._reshape_transformer.
     static const std::set<std::string> scalar_inputs = {"num_frames", "height", "width", "fps", "audio_num_frames"};
 
     std::map<std::string, ov::PartialShape> name_to_shape;

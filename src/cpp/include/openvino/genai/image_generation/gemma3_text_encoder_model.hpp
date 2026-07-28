@@ -19,9 +19,8 @@
 namespace ov {
 namespace genai {
 
-// Gemma3-based text encoder used by LTX2 for text conditioning. Unlike T5EncoderModel (which
-// returns a single 'last_hidden_state'-style embedding), this model's output is the concatenation
-// of several intermediate hidden-state layers, as required by LTX2's connectors module.
+// Gemma3-based text encoder used by LTX2 for text conditioning. Unlike T5EncoderModel, its
+// output is the concatenation of several intermediate hidden-state layers.
 class OPENVINO_GENAI_EXPORTS Gemma3TextEncoderModel {
 public:
     explicit Gemma3TextEncoderModel(const std::filesystem::path& root_dir);

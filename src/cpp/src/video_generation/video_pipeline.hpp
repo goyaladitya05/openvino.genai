@@ -31,10 +31,9 @@ enum class VideoPipelineType {
     IMAGE_2_VIDEO = 1,
 };
 
-// Internal abstract base for video generation model families (analogous to DiffusionPipeline
-// in image_generation). Concrete model families (LTXPipeline, LTX2Pipeline, ...) derive from
-// this and are selected at runtime by Text2VideoPipeline/Image2VideoPipeline based on
-// model_index.json's '_class_name'.
+// Internal abstract base for video generation model families, analogous to DiffusionPipeline
+// in image_generation. The concrete implementation is selected based on model_index.json's
+// '_class_name'.
 class VideoPipeline {
 public:
     const VideoGenerationConfig& get_generation_config() const {
@@ -86,8 +85,7 @@ public:
     virtual ~VideoPipeline() = default;
 
 protected:
-    // Fills in any sentinel/unset fields of 'config' with this model family's defaults
-    // (mirrors LTX-Video's existing replace_defaults() sentinel-based merging).
+    // Fills in any sentinel/unset fields of 'config' with this model family's defaults.
     virtual void replace_config_defaults(VideoGenerationConfig& config) const = 0;
 
     VideoGenerationConfig m_generation_config;

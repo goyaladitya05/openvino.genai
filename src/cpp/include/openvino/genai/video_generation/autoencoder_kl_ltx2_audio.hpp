@@ -16,8 +16,8 @@
 
 namespace ov::genai {
 
-// LTX2's audio VAE decoder: decodes a mel-spectrogram latent into a mel spectrogram (still not a
-// waveform - LTX2Vocoder does that final step). Decoder-only, matching the text-to-video scope.
+// LTX2's audio VAE decoder: decodes a mel-spectrogram latent into a mel spectrogram.
+// LTX2Vocoder converts that into the final waveform.
 class OPENVINO_GENAI_EXPORTS AutoencoderKLLTX2Audio {
 public:
     struct OPENVINO_GENAI_EXPORTS Config {

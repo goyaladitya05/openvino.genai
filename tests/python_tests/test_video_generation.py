@@ -640,8 +640,7 @@ class TestImage2VideoPipeline:
 
 
 class TestLTX2Text2VideoPipeline:
-    """Text-to-audio-video generation via LTX2, dispatched through Text2VideoPipeline based on
-    model_index.json's '_class_name' (see src/cpp/src/video_generation/text2video_pipeline.cpp)."""
+    """Text-to-audio-video generation via LTX2."""
 
     GENERATE_KWARGS = dict(height=32, width=32, num_frames=9, num_inference_steps=2)
 
@@ -658,8 +657,7 @@ class TestLTX2Text2VideoPipeline:
 
         video = np.array(result.video)
         assert video.shape == (1, 9, 32, 32, 3)
-        # Audio is [num_videos_per_prompt, num_channels, num_samples]; LTX-Video's result.audio
-        # stays empty (see TestVideoGenerationResult), LTX2's should be populated.
+        # Audio is [num_videos_per_prompt, num_channels, num_samples]
         audio = np.array(result.audio)
         assert audio.shape[0] == 1
         assert audio.shape[1] == 2

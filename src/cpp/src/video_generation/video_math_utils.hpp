@@ -18,8 +18,8 @@
 #include "image_generation/schedulers/ischeduler.hpp"
 #include "openvino/genai/image_generation/scheduler.hpp"
 
-// Tensor math shared between video model families (LTXPipeline, LTX2Pipeline, ...): patch
-// packing/unpacking, latent normalization, and CFG rescaling. None of this is LTX-Video specific.
+// Tensor math shared between video model families: patch packing/unpacking, latent
+// normalization, and CFG rescaling.
 namespace {
 
 inline std::shared_ptr<ov::genai::IScheduler> cast_scheduler(std::shared_ptr<ov::genai::Scheduler>&& scheduler) {

@@ -245,8 +245,7 @@ namespace ov::genai {
 
 // LTX2 text-to-audio-video pipeline: a joint video+audio diffusion transformer conditioned on a
 // Gemma3-based text encoder, with independent video and audio VAEs and a vocoder producing the
-// final waveform. See the class-level comment in video_pipeline.hpp for how this fits into the
-// VideoPipeline hierarchy. Scope: text-to-video only (no image conditioning yet).
+// final waveform.
 class LTX2Pipeline : public VideoPipeline {
     std::shared_ptr<IScheduler> m_scheduler, m_audio_scheduler;
     std::shared_ptr<Gemma3TextEncoderModel> m_text_encoder;
@@ -383,8 +382,7 @@ public:
 
         const size_t batch_size_multiplier = do_classifier_free_guidance(guidance_scale, guidance_scale) ? 2 : 1;
         m_reshape_batch_size_multiplier = batch_size_multiplier;
-        // Text encoder / transformer batch dims are what matter most for perf; VAEs, connectors,
-        // and vocoder are left dynamic-shaped in this first version.
+        // VAEs, connectors and vocoder are left dynamic-shaped.
         m_text_encoder->reshape(static_cast<int>(batch_size_multiplier), static_cast<int>(m_generation_config.max_sequence_length));
         m_transformer->reshape(batch_size_multiplier * num_videos_per_prompt);
     }
@@ -424,9 +422,7 @@ public:
                                 "combination (CFG on vs. off). Reshape and recompile for the requested settings.");
             }
         } else if (m_reshape_batch_size_multiplier == 0) {
-            // Not yet reshaped explicitly - record the multiplier so a later compile()/reshape()
-            // call can detect a mismatched request; the model itself stays dynamic-shaped until
-            // reshape() is called explicitly (mirrors LTXPipeline's lazy-construction contract).
+            // Record the multiplier so a later compile()/reshape() can detect a mismatched request.
             m_reshape_batch_size_multiplier = batch_size_multiplier;
         } else {
             OPENVINO_ASSERT(m_reshape_batch_size_multiplier == batch_size_multiplier,
