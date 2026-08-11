@@ -59,11 +59,11 @@ setup(
             "transformers[sentencepiece]==5.0.0",
             "sentence_transformers==5.3.0",
             "huggingface-hub==1.22.0",
-            "tqdm==4.68.4",
+            "tqdm==4.70.0",
             "optimum-intel[nncf,tests]==2.0.0",
         ],
         "kokoro": [
-            "spacy==3.8.14",
+            "spacy==3.8.15",
             "kokoro==0.9.4",
             "transformers==4.57.6",
             "optimum-intel[nncf] @ https://github.com/huggingface/optimum-intel/archive/a8c4734741e766ef95d7f1a7d1e29a1d4ba2ab8f.tar.gz",
