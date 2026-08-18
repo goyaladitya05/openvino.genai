@@ -209,6 +209,16 @@ ov::Tensor prepare_audio_coords(size_t batch_size,
     return coords;
 }
 
+ov::Tensor i64_to_f32(const ov::Tensor& t) {
+    ov::Tensor result(ov::element::f32, t.get_shape());
+    const int64_t* src = t.data<const int64_t>();
+    float* dst = result.data<float>();
+    for (size_t i = 0; i < t.get_size(); ++i) {
+        dst[i] = static_cast<float>(src[i]);
+    }
+    return result;
+}
+
 // Repeats a [B, ...] coordinates tensor along the batch dimension: result = cat([t, t], dim=0).
 ov::Tensor repeat_batch(const ov::Tensor& t) {
     const ov::Shape shape = t.get_shape();
@@ -216,7 +226,6 @@ ov::Tensor repeat_batch(const ov::Tensor& t) {
     out_shape[0] *= 2;
     ov::Tensor result(t.get_element_type(), out_shape);
 
-    const size_t per_batch_elems = t.get_size() / shape[0];
     const float* src = t.data<const float>();
     float* dst = result.data<float>();
     std::memcpy(dst, src, t.get_size() * sizeof(float));
@@ -317,26 +326,9 @@ public:
         m_generation_config = LTX2_DEFAULT_CONFIG;
     }
 
-    LTX2Pipeline(const std::filesystem::path& models_dir, const std::string& device, const ov::AnyMap& properties) {
-        m_models_dir = models_dir;
-        read_vae_compression_ratios();
-        read_scheduler_params();
-
-        m_scheduler = cast_scheduler(Scheduler::from_config(models_dir / "scheduler/scheduler_config.json"));
-        m_audio_scheduler = cast_scheduler(Scheduler::from_config(models_dir / "scheduler/scheduler_config.json"));
-
-        m_text_encoder = std::make_shared<Gemma3TextEncoderModel>(models_dir / "text_encoder", device, properties);
-        m_connectors = std::make_shared<LTX2TextConnectors>(models_dir / "connectors", device, properties);
-        m_transformer = std::make_shared<LTX2VideoTransformer3DModel>(models_dir / "transformer", device, properties);
-        m_vae = std::make_shared<AutoencoderKLLTXVideo>(models_dir / "vae_decoder", device, properties);
-        m_audio_vae = std::make_shared<AutoencoderKLLTX2Audio>(models_dir / "audio_vae_decoder", device, properties);
-        m_vocoder = std::make_shared<LTX2Vocoder>(models_dir / "vocoder", device, properties);
-
-        m_text_encode_device = m_denoise_device = m_vae_device = device;
-        m_compile_properties = properties;
-        m_is_compiled = true;
-        m_generation_config = LTX2_DEFAULT_CONFIG;
-        update_adapters_from_properties(properties, m_generation_config.adapters);
+    LTX2Pipeline(const std::filesystem::path& models_dir, const std::string& device, const ov::AnyMap& properties)
+        : LTX2Pipeline(models_dir) {
+        compile(device, device, device, properties);
     }
 
     std::shared_ptr<VideoPipeline> clone() override {
@@ -487,14 +479,7 @@ public:
         ov::Tensor prompt_attention_mask_i64 = m_text_encoder->get_prompt_attention_mask();
 
         // Connectors expect a float attention mask.
-        ov::Tensor prompt_attention_mask_f32(ov::element::f32, prompt_attention_mask_i64.get_shape());
-        {
-            const int64_t* src = prompt_attention_mask_i64.data<const int64_t>();
-            float* dst = prompt_attention_mask_f32.data<float>();
-            for (size_t i = 0; i < prompt_attention_mask_i64.get_size(); ++i) {
-                dst[i] = static_cast<float>(src[i]);
-            }
-        }
+        ov::Tensor prompt_attention_mask_f32 = i64_to_f32(prompt_attention_mask_i64);
 
         infer_start = std::chrono::steady_clock::now();
         LTX2TextConnectors::Output connector_output = m_connectors->infer(prompt_embeds, prompt_attention_mask_f32);
@@ -507,14 +492,7 @@ public:
 
         // The transformer's video-side mask input is i64 (matches connector_attention_mask's own
         // element type), but the audio-side mask input is f32 - convert once, outside the loop.
-        ov::Tensor audio_encoder_attention_mask(ov::element::f32, connector_attention_mask.get_shape());
-        {
-            const int64_t* src = connector_attention_mask.data<const int64_t>();
-            float* dst = audio_encoder_attention_mask.data<float>();
-            for (size_t i = 0; i < connector_attention_mask.get_size(); ++i) {
-                dst[i] = static_cast<float>(src[i]);
-            }
-        }
+        ov::Tensor audio_encoder_attention_mask = i64_to_f32(connector_attention_mask);
 
         // 2. Prepare video and audio latents
         OPENVINO_ASSERT(config.generator, "Generator must not be null");
@@ -552,26 +530,57 @@ public:
         }
 
         // 5. Denoising loop
-        std::vector<float> x0_video_cond(latents.get_size()), x0_video_uncond(latents.get_size());
-        std::vector<float> x0_audio_cond(audio_latents.get_size()), x0_audio_uncond(audio_latents.get_size());
-        std::vector<float> guided_x0_video(latents.get_size()), guided_x0_audio(audio_latents.get_size());
-        std::vector<float> velocity_video(latents.get_size()), velocity_audio(audio_latents.get_size());
+        // x0-space scratch is only needed when a guidance rescale is requested (rescale operates
+        // in x0 space; plain CFG is applied directly on velocities, which is algebraically equal).
+        const size_t x0_scratch_size = (use_cfg && (guidance_rescale > 0.0f || audio_guidance_rescale > 0.0f))
+                                           ? std::max(latents.get_size(), audio_latents.get_size())
+                                           : 0;
+        std::vector<float> x0_cond(x0_scratch_size), x0_uncond(x0_scratch_size), guided_x0(x0_scratch_size);
+
+        ov::Tensor velocity_video_tensor(ov::element::f32, latents.get_shape());
+        ov::Tensor velocity_audio_tensor(ov::element::f32, audio_latents.get_shape());
+        ov::Tensor latent_model_input, audio_latent_model_input;
+        if (use_cfg) {
+            ov::Shape s = latents.get_shape();
+            s[0] *= 2;
+            latent_model_input = ov::Tensor(ov::element::f32, s);
+            ov::Shape as = audio_latents.get_shape();
+            as[0] *= 2;
+            audio_latent_model_input = ov::Tensor(ov::element::f32, as);
+        }
+        ov::Tensor timestep(ov::element::f32, {B * batch_size_multiplier});
+
+        // Applies CFG (+ optional x0-space rescale) to one modality's [uncond; cond] prediction.
+        auto apply_guidance = [&](const ov::Tensor& prediction, const ov::Tensor& sample_t,
+                                  float scale, float rescale, float sigma, ov::Tensor& out_velocity) {
+            const size_t n = sample_t.get_size();
+            const float* v_uncond = prediction.data<const float>();
+            const float* v_cond = v_uncond + n;
+            float* out = out_velocity.data<float>();
+            if (rescale > 0.0f) {
+                const float* sample = sample_t.data<const float>();
+                velocity_to_x0(sample, v_uncond, sigma, n, x0_uncond.data());
+                velocity_to_x0(sample, v_cond, sigma, n, x0_cond.data());
+                for (size_t k = 0; k < n; ++k) {
+                    guided_x0[k] = x0_cond[k] + (scale - 1.0f) * (x0_cond[k] - x0_uncond[k]);
+                }
+                rescale_noise_cfg(guided_x0.data(), x0_cond.data(), sample_t.get_shape()[0],
+                                  n / sample_t.get_shape()[0], rescale);
+                x0_to_velocity(sample, guided_x0.data(), sigma, n, out);
+            } else {
+                for (size_t k = 0; k < n; ++k) {
+                    out[k] = v_cond[k] + (scale - 1.0f) * (v_cond[k] - v_uncond[k]);
+                }
+            }
+        };
 
         for (size_t i = 0; i < timesteps.size(); ++i) {
             auto step_start = std::chrono::steady_clock::now();
             const float sigma = timesteps[i] / static_cast<float>(m_num_train_timesteps);
 
-            ov::Tensor latent_model_input, audio_latent_model_input;
             if (use_cfg) {
-                ov::Shape s = latents.get_shape();
-                s[0] *= 2;
-                latent_model_input = ov::Tensor(ov::element::f32, s);
                 numpy_utils::batch_copy(latents, latent_model_input, 0, 0, B);
                 numpy_utils::batch_copy(latents, latent_model_input, 0, B, B);
-
-                ov::Shape as = audio_latents.get_shape();
-                as[0] *= 2;
-                audio_latent_model_input = ov::Tensor(ov::element::f32, as);
                 numpy_utils::batch_copy(audio_latents, audio_latent_model_input, 0, 0, B);
                 numpy_utils::batch_copy(audio_latents, audio_latent_model_input, 0, B, B);
             } else {
@@ -579,7 +588,6 @@ public:
                 audio_latent_model_input = audio_latents;
             }
 
-            ov::Tensor timestep(ov::element::f32, {B * batch_size_multiplier});
             std::fill_n(timestep.data<float>(), timestep.get_size(), timesteps[i]);
 
             infer_start = std::chrono::steady_clock::now();
@@ -601,51 +609,22 @@ public:
             const auto infer_duration = ov::genai::PerfMetrics::get_microsec(std::chrono::steady_clock::now() - infer_start);
             m_perf_metrics.raw_metrics.transformer_inference_durations.emplace_back(MicroSeconds(infer_duration));
 
-            const float* sample_video = latents.data<const float>();
-            const float* sample_audio = audio_latents.data<const float>();
-
+            ov::Tensor video_velocity, audio_velocity;
             if (use_cfg) {
-                const float* v_uncond = transformer_output.video.data<const float>();
-                const float* v_cond = v_uncond + latents.get_size();
-                velocity_to_x0(sample_video, v_uncond, sigma, latents.get_size(), x0_video_uncond.data());
-                velocity_to_x0(sample_video, v_cond, sigma, latents.get_size(), x0_video_cond.data());
-
-                const float* a_uncond = transformer_output.audio.data<const float>();
-                const float* a_cond = a_uncond + audio_latents.get_size();
-                velocity_to_x0(sample_audio, a_uncond, sigma, audio_latents.get_size(), x0_audio_uncond.data());
-                velocity_to_x0(sample_audio, a_cond, sigma, audio_latents.get_size(), x0_audio_cond.data());
-
-                for (size_t k = 0; k < guided_x0_video.size(); ++k) {
-                    guided_x0_video[k] = x0_video_cond[k] + (guidance_scale - 1.0f) * (x0_video_cond[k] - x0_video_uncond[k]);
-                }
-                for (size_t k = 0; k < guided_x0_audio.size(); ++k) {
-                    guided_x0_audio[k] = x0_audio_cond[k] + (audio_guidance_scale - 1.0f) * (x0_audio_cond[k] - x0_audio_uncond[k]);
-                }
-
-                if (guidance_rescale > 0.0f) {
-                    rescale_noise_cfg(guided_x0_video.data(), x0_video_cond.data(), latents.get_shape()[0],
-                                      latents.get_size() / latents.get_shape()[0], guidance_rescale);
-                }
-                if (audio_guidance_rescale > 0.0f) {
-                    rescale_noise_cfg(guided_x0_audio.data(), x0_audio_cond.data(), audio_latents.get_shape()[0],
-                                      audio_latents.get_size() / audio_latents.get_shape()[0], audio_guidance_rescale);
-                }
+                apply_guidance(transformer_output.video, latents, guidance_scale, guidance_rescale,
+                               sigma, velocity_video_tensor);
+                apply_guidance(transformer_output.audio, audio_latents, audio_guidance_scale,
+                               audio_guidance_rescale, sigma, velocity_audio_tensor);
+                video_velocity = velocity_video_tensor;
+                audio_velocity = velocity_audio_tensor;
             } else {
-                velocity_to_x0(sample_video, transformer_output.video.data<const float>(), sigma, latents.get_size(), guided_x0_video.data());
-                velocity_to_x0(sample_audio, transformer_output.audio.data<const float>(), sigma, audio_latents.get_size(), guided_x0_audio.data());
+                video_velocity = transformer_output.video;
+                audio_velocity = transformer_output.audio;
             }
 
-            x0_to_velocity(sample_video, guided_x0_video.data(), sigma, latents.get_size(), velocity_video.data());
-            x0_to_velocity(sample_audio, guided_x0_audio.data(), sigma, audio_latents.get_size(), velocity_audio.data());
-
-            ov::Tensor velocity_video_tensor(ov::element::f32, latents.get_shape());
-            std::memcpy(velocity_video_tensor.data<float>(), velocity_video.data(), velocity_video.size() * sizeof(float));
-            ov::Tensor velocity_audio_tensor(ov::element::f32, audio_latents.get_shape());
-            std::memcpy(velocity_audio_tensor.data<float>(), velocity_audio.data(), velocity_audio.size() * sizeof(float));
-
-            auto video_step_result = m_scheduler->step(velocity_video_tensor, latents, i, config.generator);
+            auto video_step_result = m_scheduler->step(video_velocity, latents, i, config.generator);
             latents = video_step_result["latent"];
-            auto audio_step_result = m_audio_scheduler->step(velocity_audio_tensor, audio_latents, i, config.generator);
+            auto audio_step_result = m_audio_scheduler->step(audio_velocity, audio_latents, i, config.generator);
             audio_latents = audio_step_result["latent"];
 
             if (callback_ptr && callback_ptr->has_callback() &&

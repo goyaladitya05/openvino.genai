@@ -180,16 +180,18 @@ ov::Tensor Gemma3TextEncoderModel::infer(const std::string& pos_prompt,
     ov::Tensor result(ov::element::f32, {batch_size, seq_len, hidden_size * num_layers});
     float* result_data = result.data<float>();
 
+    // Iterate tokens outermost and layers innermost so the destination is written sequentially
+    // exactly once (the layer-outermost order re-traverses the whole result once per layer).
+    std::vector<const float*> layer_data(num_layers);
     for (size_t l = 0; l < num_layers; ++l) {
-        ov::Tensor layer = m_request.get_tensor(m_hidden_state_output_names[l]);
-        const float* layer_data = layer.data<float>();
-        for (size_t b = 0; b < batch_size; ++b) {
-            for (size_t s = 0; s < seq_len; ++s) {
-                const float* src = layer_data + (b * seq_len + s) * hidden_size;
-                float* dst = result_data + (b * seq_len + s) * hidden_size * num_layers;
-                for (size_t h = 0; h < hidden_size; ++h) {
-                    dst[h * num_layers + l] = src[h];
-                }
+        layer_data[l] = m_request.get_tensor(m_hidden_state_output_names[l]).data<float>();
+    }
+    for (size_t token = 0; token < batch_size * seq_len; ++token) {
+        float* dst = result_data + token * hidden_size * num_layers;
+        const size_t token_offset = token * hidden_size;
+        for (size_t h = 0; h < hidden_size; ++h) {
+            for (size_t l = 0; l < num_layers; ++l) {
+                dst[h * num_layers + l] = layer_data[l][token_offset + h];
             }
         }
     }
