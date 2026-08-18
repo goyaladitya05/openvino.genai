@@ -28,21 +28,18 @@
 #include "diffusion_caching/taylorseer_lite.hpp"
 #include "lora/helper.hpp"
 #include "logger.hpp"
+#include "openvino/genai/image_generation/t5_encoder_model.hpp"
+#include "openvino/genai/video_generation/autoencoder_kl_ltx_video.hpp"
 #include "openvino/genai/video_generation/ltx_video_transformer_3d_model.hpp"
 #include "generation_config_utils.hpp"
+#include "video_generation/video_pipeline.hpp"
+#include "video_generation/video_math_utils.hpp"
 
 #include "utils.hpp"
 
 using namespace ov::genai;
 
 namespace {
-
-std::string get_class_name(const std::filesystem::path& root_dir) {
-    const std::filesystem::path model_index_path = root_dir / "model_index.json";
-    std::ifstream file(model_index_path);
-    OPENVINO_ASSERT(file.is_open(), "Failed to open ", model_index_path);
-    return nlohmann::json::parse(file)["_class_name"].get<std::string>();
-}
 
 const VideoGenerationConfig LTX_VIDEO_DEFAULT_CONFIG = VideoGenerationConfig{
     std::nullopt,            // negative_prompt
@@ -85,12 +82,6 @@ void replace_defaults(VideoGenerationConfig& config) {
     }
 }
 
-std::shared_ptr<IScheduler> cast_scheduler(std::shared_ptr<Scheduler>&& scheduler) {
-    auto casted = std::dynamic_pointer_cast<IScheduler>(std::move(scheduler));
-    OPENVINO_ASSERT(casted != nullptr, "Passed incorrect scheduler type");
-    return casted;
-}
-
 void check_inputs(const VideoGenerationConfig& generation_config, size_t vae_scale_factor) {
     utils::validate_generation_config(generation_config);
     OPENVINO_ASSERT(generation_config.height > 0, "Height must be positive");
@@ -110,208 +101,16 @@ void check_inputs(const VideoGenerationConfig& generation_config, size_t vae_sca
                     vae_scale_factor);
 }
 
-// Rescales the CFG noise prediction to fix overexposure when using zero terminal SNR
-// noise_cfg and noise_pred_text each contain batch_size * elements_per_sample consecutive floats.
-void rescale_noise_cfg(float* noise_cfg,
-                       const float* noise_pred_text,
-                       size_t batch_size,
-                       size_t elements_per_sample,
-                       float guidance_rescale) {
-    if (elements_per_sample == 0) {
-        return;
-    }
-    for (size_t b = 0; b < batch_size; ++b) {
-        float* cfg_sample = noise_cfg + b * elements_per_sample;
-        const float* text_sample = noise_pred_text + b * elements_per_sample;
-
-        double text_mean = 0.0;
-        for (size_t i = 0; i < elements_per_sample; ++i) {
-            text_mean += text_sample[i];
-        }
-        text_mean /= static_cast<double>(elements_per_sample);
-
-        double text_var = 0.0;
-        for (size_t i = 0; i < elements_per_sample; ++i) {
-            const double diff = text_sample[i] - text_mean;
-            text_var += diff * diff;
-        }
-        const float std_text = static_cast<float>(std::sqrt(text_var / static_cast<double>(elements_per_sample)));
-
-        double cfg_mean = 0.0;
-        for (size_t i = 0; i < elements_per_sample; ++i) {
-            cfg_mean += cfg_sample[i];
-        }
-        cfg_mean /= static_cast<double>(elements_per_sample);
-
-        double cfg_var = 0.0;
-        for (size_t i = 0; i < elements_per_sample; ++i) {
-            const double diff = cfg_sample[i] - cfg_mean;
-            cfg_var += diff * diff;
-        }
-        const float std_cfg = static_cast<float>(std::sqrt(cfg_var / static_cast<double>(elements_per_sample)));
-
-        const float scale = std_cfg > 0.0f ? std_text / std_cfg : 1.0f;
-        for (size_t i = 0; i < elements_per_sample; ++i) {
-            const float rescaled = cfg_sample[i] * scale;
-            cfg_sample[i] = guidance_rescale * rescaled + (1.0f - guidance_rescale) * cfg_sample[i];
-        }
-    }
-}
-
-// Unpacked latents of shape [B, C, F, H, W] are patched into tokens of shape [B, C, F // p_t, p_t, H // p, p, W // p,
-// p]. The patch dimensions are then permuted and collapsed into the channel dimension of shape: [B, F // p_t * H // p *
-// W // p, C * p_t * p * p] (a 3 dimensional tensor). dim=0 is the batch size, dim=1 is the effective video sequence
-// length, dim=2 is the effective number of input features
-ov::Tensor pack_latents(ov::Tensor& latents, size_t patch_size, size_t patch_size_t) {
-    ov::Shape latents_shape = latents.get_shape();
-    size_t batch_size = latents_shape.at(0), num_channels = latents_shape.at(1), num_frames = latents_shape.at(2),
-           height = latents_shape.at(3), width = latents_shape.at(4);
-    size_t post_patch_num_frames = num_frames / patch_size_t;
-    size_t post_patch_height = height / patch_size;
-    size_t post_patch_width = width / patch_size;
-    latents.set_shape({batch_size,
-                       num_channels,
-                       post_patch_num_frames,
-                       patch_size_t,
-                       post_patch_height,
-                       patch_size,
-                       post_patch_width,
-                       patch_size});
-    std::array<int64_t, 8> order = {0, 2, 4, 6, 1, 3, 5, 7};
-    std::vector<ov::Tensor> outputs{ov::Tensor(ov::element::f32, {})};
-    ov::op::v1::Transpose{}.evaluate(outputs,
-                                     {latents, ov::Tensor(ov::element::i64, ov::Shape{order.size()}, order.data())});
-    ov::Shape permuted_shape = outputs.at(0).get_shape();
-    outputs.at(0).set_shape({permuted_shape.at(0),
-                             permuted_shape.at(1) * permuted_shape.at(2) * permuted_shape.at(3),
-                             permuted_shape.at(4) * permuted_shape.at(5) * permuted_shape.at(6)});
-    return outputs.at(0);
-}
-
-// Packed latents of shape [B, S, D] (S is the effective video sequence length, D is the effective feature dimensions)
-// are unpacked and reshaped into a video tensor of shape [B, C, F, H, W]. This is the inverse operation of what happens
-// in the `_pack_latents` method.
-ov::Tensor unpack_latents(const ov::Tensor& latents,
-                          size_t num_frames,
-                          size_t height,
-                          size_t width,
-                          size_t patch_size = 1,
-                          size_t patch_size_t = 1) {
-    const ov::Shape in_shape = latents.get_shape();
-    OPENVINO_ASSERT(in_shape.size() == 3, "unpack_latents expects [B, S, D] input shape");
-    const size_t batch_size = in_shape.at(0), sequence_length = in_shape.at(1), feature_dimensions = in_shape.at(2);
-
-    const size_t patch_volume = patch_size_t * patch_size * patch_size;
-    OPENVINO_ASSERT(feature_dimensions % patch_volume == 0, "D must be divisible by patch_size_t * patch_size * patch_size");
-    const size_t num_channels = feature_dimensions / patch_volume;
-
-    ov::Tensor reshaped{latents.get_element_type(), latents.get_shape()};
-    latents.copy_to(reshaped);
-    reshaped.set_shape({batch_size, num_frames, height, width, num_channels, patch_size_t, patch_size, patch_size});
-
-    // permute(0, 4, 1, 5, 2, 6, 3, 7) -> [B, C, F//patch_size_t, patch_size_t, H//patch_size, patch_size, W//patch_size, patch_size]
-    const std::array<int64_t, 8> order = {0, 4, 1, 5, 2, 6, 3, 7};
-    std::vector<ov::Tensor> outputs{ov::Tensor(reshaped.get_element_type(), {})};
-    ov::op::v1::Transpose{}.evaluate(
-        outputs,
-        {reshaped, ov::Tensor(ov::element::i64, ov::Shape{order.size()}, const_cast<int64_t*>(order.data()))}
-    );
-
-    // (F//patch_size_t, patch_size_t) -> F, (H//patch_size, patch_size) -> H, (W//patch_size, patch_size) -> W
-    const ov::Shape perm = outputs[0].get_shape(); // [B, C, F//patch_size_t, patch_size_t, H//patch_size, patch_size, W//patch_size, patch_size]
-    OPENVINO_ASSERT(perm.size() == 8, "Unexpected rank after transpose");
-
-    const size_t F = perm[2] * perm[3]; // (F//patch_size_t) * patch_size_t
-    const size_t H = perm[4] * perm[5]; // (H//patch_size) * patch_size
-    const size_t W = perm[6] * perm[7]; // (W//patch_size) * patch_size
-
-    outputs[0].set_shape({perm[0], perm[1], F, H, W}); // [B, C, F, H, W]
-    return outputs[0];
-}
-
-inline void reshape_to_1C111(ov::Tensor& t, size_t C) {
-    size_t elems = 1;
-    for (auto d : t.get_shape())
-        elems *= d;
-
-    OPENVINO_ASSERT(elems == C, "latents_mean/std must contain exactly C elements (got ", elems, ", expected ", C, ")");
-
-    t.set_shape({1, C, 1, 1, 1});
-}
-
-inline ov::Tensor make_scalar(const ov::element::Type& et, float v) {
-    ov::Tensor s(et, {});
-    if (et == ov::element::f32) {
-        *s.data<float>() = v;
-    } else if (et == ov::element::f16) {
-        *s.data<ov::float16>() = static_cast<ov::float16>(v);
-    } else if (et == ov::element::bf16) {
-        *s.data<ov::bfloat16>() = static_cast<ov::bfloat16>(v);
-    } else {
-        OPENVINO_ASSERT(false, "Unsupported element type for scalar scaling_factor");
-    }
-    return s;
-}
-
-// Denormalize latents across channel dim: [B, C, F, H, W]
-// latents = latents * latents_std / scaling_factor + latents_mean
-ov::Tensor denormalize_latents(const ov::Tensor& latents,
-                               ov::Tensor latents_mean,
-                               ov::Tensor latents_std,
-                               float scaling_factor = 1.0f) {
-    const ov::Shape latents_shape = latents.get_shape();
-    OPENVINO_ASSERT(latents_shape.size() == 5, "denormalize_latents expects [B, C, F, H, W]");
-    const size_t num_channels = latents_shape[1];
-
-    // .view(1, -1, 1, 1, 1)
-    reshape_to_1C111(latents_mean, num_channels);
-    reshape_to_1C111(latents_std, num_channels);
-
-    const auto latents_type = latents.get_element_type();
-    ov::Tensor scale = make_scalar(latents_type, scaling_factor);
-
-    // latents * latents_std
-    std::vector<ov::Tensor> tmp{ov::Tensor(latents_type, {})};
-    ov::op::v1::Multiply{}.evaluate(tmp, {latents, latents_std});  // NUMPY broadcast
-
-    // (...) / scaling_factor
-    std::vector<ov::Tensor> tmp2{ov::Tensor(latents_type, {})};
-    ov::op::v1::Divide{}.evaluate(tmp2, {tmp[0], scale});
-
-    // (...) + latents_mean
-    std::vector<ov::Tensor> result{ov::Tensor(latents_type, {})};
-    ov::op::v1::Add{}.evaluate(result, {tmp2[0], latents_mean});
-
-    return result[0];  // [B, C, F, H, W]
-}
-
-inline ov::Tensor tensor_from_vector(const std::vector<float>& data) {
-    ov::Tensor t{ov::element::f32, ov::Shape{data.size()}};
-    if (!data.empty()) {
-        std::memcpy(t.data<float>(), data.data(), data.size() * sizeof(float));
-    }
-    return t;
-}
-
 }  // anonymous namespace
 
 
 namespace ov::genai {
 
-enum class VideoPipelineType {
-    TEXT_2_VIDEO = 0,
-    IMAGE_2_VIDEO = 1,
-};
-
-class LTXPipeline {
-    using Ms = std::chrono::duration<float, std::ratio<1, 1000>>;
-
+class LTXPipeline : public VideoPipeline {
     std::shared_ptr<IScheduler> m_scheduler;
     std::shared_ptr<T5EncoderModel> m_t5_text_encoder;
     std::shared_ptr<LTXVideoTransformer3DModel> m_transformer;
     std::shared_ptr<AutoencoderKLLTXVideo> m_vae;
-    VideoGenerationPerfMetrics m_perf_metrics;
-    Ms m_load_time;
 
     size_t m_latent_num_frames = 0;
     size_t m_latent_height = 0;
@@ -476,7 +275,8 @@ class LTXPipeline {
                                       ov::genai::add_special_tokens(true)});
 
         auto infer_end = std::chrono::steady_clock::now();
-        m_perf_metrics.encoder_inference_duration["text_encoder"] = Ms{infer_end - infer_start}.count();
+        m_perf_metrics.encoder_inference_duration["text_encoder"] =
+            std::chrono::duration<float, std::milli>{infer_end - infer_start}.count();
 
         ov::Tensor prompt_attention_mask = m_t5_text_encoder->get_prompt_attention_mask();
 
@@ -497,15 +297,7 @@ class LTXPipeline {
     }
 
 public:
-    VideoGenerationConfig m_generation_config;
-
-    VideoGenerationPerfMetrics get_performance_metrics() const {
-        return m_perf_metrics;
-    }
-
-    LTXPipeline(VideoPipelineType pipeline_type,
-                const std::filesystem::path& root_dir,
-                std::chrono::steady_clock::time_point start_time = std::chrono::steady_clock::now()) {
+    LTXPipeline(VideoPipelineType pipeline_type, const std::filesystem::path& root_dir) {
         m_models_dir = root_dir;
         const std::filesystem::path model_index_path = root_dir / "model_index.json";
 
@@ -550,20 +342,17 @@ public:
                 ov::op::v11::Interpolate::InterpolateMode::BICUBIC_PILLOW);
             m_image_processor = std::make_shared<ImageProcessor>("CPU", true);
         }
-
-        m_load_time = Ms{std::chrono::steady_clock::now() - start_time};
     }
 
     LTXPipeline(VideoPipelineType pipeline_type,
                 const std::filesystem::path& models_dir,
                 const std::string& device,
-                const ov::AnyMap& properties,
-                std::chrono::steady_clock::time_point start_time = std::chrono::steady_clock::now())
+                const ov::AnyMap& properties)
         : m_scheduler{cast_scheduler(Scheduler::from_config(models_dir / "scheduler/scheduler_config.json"))},
           m_t5_text_encoder{std::make_shared<T5EncoderModel>(models_dir / "text_encoder", device, properties)},
           m_transformer{std::make_shared<LTXVideoTransformer3DModel>(models_dir / "transformer", device, properties)},
-          m_generation_config{LTX_VIDEO_DEFAULT_CONFIG},
           m_pipeline_type{pipeline_type} {
+        m_generation_config = LTX_VIDEO_DEFAULT_CONFIG;
         if (pipeline_type == VideoPipelineType::IMAGE_2_VIDEO) {
             m_vae = std::make_shared<AutoencoderKLLTXVideo>(
                 models_dir / "vae_encoder", models_dir / "vae_decoder", device, properties);
@@ -581,14 +370,11 @@ public:
         m_compile_properties = properties;
         m_is_compiled = true;
         update_adapters_from_properties(properties, m_generation_config.adapters);
-        m_load_time = Ms{std::chrono::steady_clock::now() - start_time};
     }
 
-    template<typename T = LTXPipeline>
-    std::unique_ptr<T> clone() {
-        static_assert(std::is_base_of_v<LTXPipeline, T>, "T must derive from LTXPipeline");
+    std::shared_ptr<VideoPipeline> clone() override {
         OPENVINO_ASSERT(m_is_compiled, "Cannot clone an uncompiled LTXPipeline");
-        auto cloned = std::make_unique<T>(static_cast<const LTXPipeline&>(*this));
+        auto cloned = std::make_shared<LTXPipeline>(*this);
         cloned->m_generation_config.generator.reset();
         cloned->m_scheduler = cast_scheduler(Scheduler::from_config(m_models_dir / "scheduler/scheduler_config.json"));
         cloned->m_t5_text_encoder = m_t5_text_encoder->clone();
@@ -1111,7 +897,16 @@ public:
         return VideoGenerationResult{video, m_perf_metrics};
     }
 
-    VideoGenerationResult decode(const ov::Tensor& latent) {
+    VideoGenerationResult generate(const std::string& positive_prompt,
+                                   const ov::Tensor& initial_image,
+                                   const ov::AnyMap& properties) override {
+        if (m_pipeline_type == VideoPipelineType::IMAGE_2_VIDEO) {
+            return generate(initial_image, positive_prompt, properties);
+        }
+        return generate(positive_prompt, properties);
+    }
+
+    VideoGenerationResult decode(const ov::Tensor& latent) override {
         ov::Tensor postprocessed = postprocess_latents(latent);
 
         const auto decode_start = std::chrono::steady_clock::now();
@@ -1127,7 +922,7 @@ public:
                  int64_t num_frames,
                  int64_t height,
                  int64_t width,
-                 float guidance_scale) {
+                 float guidance_scale) override {
         check_video_size(height, width);
 
         VideoGenerationConfig reshaped_config = m_generation_config;
@@ -1141,14 +936,10 @@ public:
         reshape_models(reshaped_config, batch_size_multiplier);
     }
 
-    void save_load_time(std::chrono::steady_clock::time_point start_time) {
-        m_load_time += Ms{std::chrono::steady_clock::now() - start_time};
-    }
-
     void compile(const std::string& text_encode_device,
                  const std::string& denoise_device,
                  const std::string& vae_device,
-                 const ov::AnyMap& properties) {
+                 const ov::AnyMap& properties) override {
         update_adapters_from_properties(properties, m_generation_config.adapters);
         m_t5_text_encoder->compile(text_encode_device, properties);
         m_vae->compile(vae_device, properties);
@@ -1168,8 +959,9 @@ public:
         m_compiled_batch_size_multiplier = m_reshape_batch_size_multiplier;
     }
 
-    void compile(const std::string& device, const ov::AnyMap& properties) {
-        compile(device, device, device, properties);
+protected:
+    void replace_config_defaults(VideoGenerationConfig& config) const override {
+        replace_defaults(config);
     }
 
 private:
@@ -1189,18 +981,3 @@ private:
 };
 
 }  // namespace ov::genai
-
-#include "openvino/genai/video_generation/text2video_pipeline.hpp"
-#include "openvino/genai/video_generation/image2video_pipeline.hpp"
-
-class ov::genai::Text2VideoPipeline::Impl final : public ov::genai::LTXPipeline {
-public:
-    using LTXPipeline::LTXPipeline;
-    explicit Impl(const LTXPipeline& base) : LTXPipeline(base) {}
-};
-
-class ov::genai::Image2VideoPipeline::Impl final : public ov::genai::LTXPipeline {
-public:
-    using LTXPipeline::LTXPipeline;
-    explicit Impl(const LTXPipeline& base) : LTXPipeline(base) {}
-};

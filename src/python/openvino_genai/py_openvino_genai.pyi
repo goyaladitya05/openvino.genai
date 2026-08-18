@@ -5,7 +5,7 @@ from __future__ import annotations
 import collections.abc
 import openvino._pyopenvino
 import typing
-__all__: list[str] = ['ASRDecodedResultChunk', 'ASRDecodedResults', 'ASRGenerationConfig', 'ASRPerfMetrics', 'ASRPipeline', 'ASRRawPerfMetrics', 'Adapter', 'AdapterConfig', 'AdaptiveRKVConfig', 'AggregationMode', 'AutoencoderKL', 'AutoencoderKLLTXVideo', 'CLIPTextModel', 'CLIPTextModelWithProjection', 'CacheEvictionConfig', 'ChatHistory', 'ContinuousBatchingPipeline', 'CppStdGenerator', 'DecodedResults', 'DeepSeekR1ReasoningIncrementalParser', 'DeepSeekR1ReasoningParser', 'EmbedResult', 'EmbeddingPipeline', 'EncodedGenerationResult', 'EncodedResults', 'ExtendedPerfMetrics', 'Flux2Transformer2DModel', 'FluxTransformer2DModel', 'GenerationConfig', 'GenerationFinishReason', 'GenerationHandle', 'GenerationOutput', 'GenerationResult', 'GenerationStatus', 'Generator', 'Image2ImagePipeline', 'Image2VideoPipeline', 'ImageGenerationConfig', 'ImageGenerationPerfMetrics', 'IncrementalParser', 'InpaintingPipeline', 'KVCrushAnchorPointMode', 'KVCrushConfig', 'LLMPipeline', 'LTXVideoTransformer3DModel', 'Llama3JsonToolParser', 'Llama3PythonicToolParser', 'MeanStdPair', 'OmniDecodedResults', 'OmniPipeline', 'OmniSpeechStreamerBase', 'OmniTalkerSpeechConfig', 'Parser', 'PerfMetrics', 'Phi4ReasoningIncrementalParser', 'Phi4ReasoningParser', 'PipelineMetrics', 'Qwen3TextEncoder', 'RawImageGenerationPerfMetrics', 'RawPerfMetrics', 'ReasoningIncrementalParser', 'ReasoningParser', 'SD3Transformer2DModel', 'SDPerModelsPerfMetrics', 'SDPerfMetrics', 'Scheduler', 'SchedulerConfig', 'SparseAttentionConfig', 'SparseAttentionMode', 'SpeechGenerationConfig', 'SpeechGenerationPerfMetrics', 'StopCriteria', 'StreamerBase', 'StreamingStatus', 'StructuralTagItem', 'StructuralTagsConfig', 'StructuredOutputConfig', 'SummaryStats', 'T5EncoderModel', 'Talker', 'TalkerBase', 'TalkerPerfMetrics', 'TalkerResults', 'TaylorSeerCacheConfig', 'Text2ImagePipeline', 'Text2SpeechDecodedResults', 'Text2SpeechPipeline', 'Text2VideoPipeline', 'TextEmbeddingPipeline', 'TextParserStreamer', 'TextRerankPipeline', 'TextStreamer', 'TokenizedInputs', 'Tokenizer', 'TorchGenerator', 'UNet2DConditionModel', 'VLLMParserWrapper', 'VLMDecodedResults', 'VLMPerfMetrics', 'VLMPipeline', 'VLMPipelineBase', 'VLMRawPerfMetrics', 'VideoGenerationConfig', 'VideoGenerationPerfMetrics', 'VideoGenerationResult', 'VideoMetadata', 'WhisperDecodedResultChunk', 'WhisperDecodedResults', 'WhisperGenerationConfig', 'WhisperPerfMetrics', 'WhisperPipeline', 'WhisperRawPerfMetrics', 'WhisperWordTiming', 'draft_model', 'get_version']
+__all__: list[str] = ['ASRDecodedResultChunk', 'ASRDecodedResults', 'ASRGenerationConfig', 'ASRPerfMetrics', 'ASRPipeline', 'ASRRawPerfMetrics', 'Adapter', 'AdapterConfig', 'AdaptiveRKVConfig', 'AggregationMode', 'AutoencoderKL', 'AutoencoderKLLTX2Audio', 'AutoencoderKLLTXVideo', 'CLIPTextModel', 'CLIPTextModelWithProjection', 'CacheEvictionConfig', 'ChatHistory', 'ContinuousBatchingPipeline', 'CppStdGenerator', 'DecodedResults', 'DeepSeekR1ReasoningIncrementalParser', 'DeepSeekR1ReasoningParser', 'EmbedResult', 'EmbeddingPipeline', 'EncodedGenerationResult', 'EncodedResults', 'ExtendedPerfMetrics', 'Flux2Transformer2DModel', 'FluxTransformer2DModel', 'Gemma3TextEncoderModel', 'GenerationConfig', 'GenerationFinishReason', 'GenerationHandle', 'GenerationOutput', 'GenerationResult', 'GenerationStatus', 'Generator', 'Image2ImagePipeline', 'Image2VideoPipeline', 'ImageGenerationConfig', 'ImageGenerationPerfMetrics', 'IncrementalParser', 'InpaintingPipeline', 'KVCrushAnchorPointMode', 'KVCrushConfig', 'LLMPipeline', 'LTX2TextConnectors', 'LTX2VideoTransformer3DModel', 'LTX2Vocoder', 'LTXVideoTransformer3DModel', 'Llama3JsonToolParser', 'Llama3PythonicToolParser', 'MeanStdPair', 'OmniDecodedResults', 'OmniPipeline', 'OmniSpeechStreamerBase', 'OmniTalkerSpeechConfig', 'Parser', 'PerfMetrics', 'Phi4ReasoningIncrementalParser', 'Phi4ReasoningParser', 'PipelineMetrics', 'Qwen3TextEncoder', 'RawImageGenerationPerfMetrics', 'RawPerfMetrics', 'ReasoningIncrementalParser', 'ReasoningParser', 'SD3Transformer2DModel', 'SDPerModelsPerfMetrics', 'SDPerfMetrics', 'Scheduler', 'SchedulerConfig', 'SparseAttentionConfig', 'SparseAttentionMode', 'SpeechGenerationConfig', 'SpeechGenerationPerfMetrics', 'StopCriteria', 'StreamerBase', 'StreamingStatus', 'StructuralTagItem', 'StructuralTagsConfig', 'StructuredOutputConfig', 'SummaryStats', 'T5EncoderModel', 'Talker', 'TalkerBase', 'TalkerPerfMetrics', 'TalkerResults', 'TaylorSeerCacheConfig', 'Text2ImagePipeline', 'Text2SpeechDecodedResults', 'Text2SpeechPipeline', 'Text2VideoPipeline', 'TextEmbeddingPipeline', 'TextParserStreamer', 'TextRerankPipeline', 'TextStreamer', 'TokenizedInputs', 'Tokenizer', 'TorchGenerator', 'UNet2DConditionModel', 'VLLMParserWrapper', 'VLMDecodedResults', 'VLMPerfMetrics', 'VLMPipeline', 'VLMPipelineBase', 'VLMRawPerfMetrics', 'VideoGenerationConfig', 'VideoGenerationPerfMetrics', 'VideoGenerationResult', 'VideoMetadata', 'WhisperDecodedResultChunk', 'WhisperDecodedResults', 'WhisperGenerationConfig', 'WhisperPerfMetrics', 'WhisperPipeline', 'WhisperRawPerfMetrics', 'WhisperWordTiming', 'draft_model', 'get_version']
 class ASRDecodedResultChunk:
     """
     
@@ -767,6 +767,40 @@ class AutoencoderKL:
     def get_vae_scale_factor(self) -> int:
         ...
     def reshape(self, batch_size: typing.SupportsInt, height: typing.SupportsInt, width: typing.SupportsInt) -> AutoencoderKL:
+        ...
+class AutoencoderKLLTX2Audio:
+    """
+    LTX2 audio VAE decoder (mel-spectrogram decoder).
+    """
+    class Config:
+        """
+        Configuration for AutoencoderKLLTX2Audio.
+        """
+        @property
+        def latent_channels(self) -> int:
+            ...
+        @property
+        def mel_bins(self) -> int:
+            ...
+        @property
+        def mel_compression_ratio(self) -> int:
+            ...
+        @property
+        def sample_rate(self) -> int:
+            ...
+    @typing.overload
+    def __init__(self, vae_decoder_path: os.PathLike | str | bytes) -> None:
+        ...
+    @typing.overload
+    def __init__(self, vae_decoder_path: os.PathLike | str | bytes, device: str, **kwargs) -> None:
+        ...
+    def compile(self, device: str, **kwargs) -> AutoencoderKLLTX2Audio:
+        ...
+    def decode(self, latent: openvino._pyopenvino.Tensor) -> openvino._pyopenvino.Tensor:
+        ...
+    def get_config(self) -> AutoencoderKLLTX2Audio.Config:
+        ...
+    def reshape(self, batch_size: typing.SupportsInt) -> AutoencoderKLLTX2Audio:
         ...
 class AutoencoderKLLTXVideo:
     """
@@ -1621,6 +1655,38 @@ class FluxTransformer2DModel:
     def reshape(self, batch_size: typing.SupportsInt, height: typing.SupportsInt, width: typing.SupportsInt, tokenizer_model_max_length: typing.SupportsInt) -> FluxTransformer2DModel:
         ...
     def set_hidden_states(self, tensor_name: str, encoder_hidden_states: openvino._pyopenvino.Tensor) -> None:
+        ...
+class Gemma3TextEncoderModel:
+    """
+    Gemma3-based text encoder used by LTX2.
+    """
+    @typing.overload
+    def __init__(self, root_dir: os.PathLike | str | bytes) -> None:
+        """
+                        Gemma3TextEncoderModel class constructor.
+                        root_dir (os.PathLike): Model root directory.
+        """
+    @typing.overload
+    def __init__(self, root_dir: os.PathLike | str | bytes, device: str, **kwargs) -> None:
+        """
+                        Gemma3TextEncoderModel class constructor.
+                        root_dir (os.PathLike): Model root directory.
+                        device (str): Device on which inference will be done.
+                        kwargs: Device properties.
+        """
+    @typing.overload
+    def __init__(self, model: Gemma3TextEncoderModel) -> None:
+        ...
+    def compile(self, device: str, **kwargs) -> None:
+        ...
+    def get_prompt_attention_mask(self) -> openvino._pyopenvino.Tensor:
+        ...
+    def infer(self, pos_prompt: str, neg_prompt: str, do_classifier_free_guidance: bool, max_sequence_length: typing.SupportsInt, **kwargs) -> openvino._pyopenvino.Tensor:
+        """
+                        Tokenizes and encodes the prompt(s), returning the concatenation of intermediate
+                        hidden-state layers as required by LTX2's connectors module.
+        """
+    def reshape(self, batch_size: typing.SupportsInt, max_sequence_length: typing.SupportsInt) -> Gemma3TextEncoderModel:
         ...
 class GenerationConfig:
     """
@@ -2739,6 +2805,100 @@ class LLMPipeline:
     def set_generation_config(self, config: GenerationConfig) -> None:
         ...
     def start_chat(self, system_message: str = '') -> None:
+        ...
+class LTX2TextConnectors:
+    """
+    Projects text encoder hidden states into video/audio conditioning embeddings.
+    """
+    class Output:
+        @property
+        def audio_text_embedding(self) -> openvino._pyopenvino.Tensor:
+            ...
+        @property
+        def connector_attention_mask(self) -> openvino._pyopenvino.Tensor:
+            ...
+        @property
+        def video_text_embedding(self) -> openvino._pyopenvino.Tensor:
+            ...
+    @typing.overload
+    def __init__(self, root_dir: os.PathLike | str | bytes) -> None:
+        ...
+    @typing.overload
+    def __init__(self, root_dir: os.PathLike | str | bytes, device: str, **kwargs) -> None:
+        ...
+    def compile(self, device: str, **kwargs) -> LTX2TextConnectors:
+        ...
+    def infer(self, text_encoder_hidden_states: openvino._pyopenvino.Tensor, attention_mask: openvino._pyopenvino.Tensor) -> LTX2TextConnectors.Output:
+        ...
+class LTX2VideoTransformer3DModel:
+    """
+    Joint video+audio diffusion transformer used by LTX2.
+    """
+    class Config:
+        """
+        Configuration for LTX2VideoTransformer3DModel.
+        """
+        def __init__(self, config_path: os.PathLike | str | bytes) -> None:
+            ...
+        @property
+        def audio_in_channels(self) -> int:
+            ...
+        @property
+        def in_channels(self) -> int:
+            ...
+        @property
+        def patch_size(self) -> int:
+            ...
+        @property
+        def patch_size_t(self) -> int:
+            ...
+    class Output:
+        @property
+        def audio(self) -> openvino._pyopenvino.Tensor:
+            ...
+        @property
+        def video(self) -> openvino._pyopenvino.Tensor:
+            ...
+    @typing.overload
+    def __init__(self, root_dir: os.PathLike | str | bytes) -> None:
+        ...
+    @typing.overload
+    def __init__(self, root_dir: os.PathLike | str | bytes, device: str, **kwargs) -> None:
+        ...
+    def compile(self, device: str, **kwargs) -> LTX2VideoTransformer3DModel:
+        ...
+    def get_config(self) -> LTX2VideoTransformer3DModel.Config:
+        ...
+    def get_expected_batch_size(self) -> int:
+        ...
+    def infer(self, hidden_states: openvino._pyopenvino.Tensor, audio_hidden_states: openvino._pyopenvino.Tensor, encoder_hidden_states: openvino._pyopenvino.Tensor, audio_encoder_hidden_states: openvino._pyopenvino.Tensor, timestep: openvino._pyopenvino.Tensor, encoder_attention_mask: openvino._pyopenvino.Tensor, audio_encoder_attention_mask: openvino._pyopenvino.Tensor, num_frames: typing.SupportsInt, height: typing.SupportsInt, width: typing.SupportsInt, fps: typing.SupportsFloat, audio_num_frames: typing.SupportsInt, video_coords: openvino._pyopenvino.Tensor, audio_coords: openvino._pyopenvino.Tensor) -> LTX2VideoTransformer3DModel.Output:
+        ...
+    def reshape(self, batch_size: typing.SupportsInt) -> LTX2VideoTransformer3DModel:
+        ...
+    def set_adapters(self, adapters: openvino_genai.py_openvino_genai.AdapterConfig | None) -> None:
+        ...
+class LTX2Vocoder:
+    """
+    Converts a mel spectrogram into a raw audio waveform.
+    """
+    class Config:
+        """
+        Configuration for LTX2Vocoder.
+        """
+        @property
+        def output_sampling_rate(self) -> int:
+            ...
+    @typing.overload
+    def __init__(self, root_dir: os.PathLike | str | bytes) -> None:
+        ...
+    @typing.overload
+    def __init__(self, root_dir: os.PathLike | str | bytes, device: str, **kwargs) -> None:
+        ...
+    def compile(self, device: str, **kwargs) -> LTX2Vocoder:
+        ...
+    def get_config(self) -> LTX2Vocoder.Config:
+        ...
+    def infer(self, mel_spectrogram: openvino._pyopenvino.Tensor) -> openvino._pyopenvino.Tensor:
         ...
 class LTXVideoTransformer3DModel:
     """
@@ -5854,6 +6014,8 @@ class VLMRawPerfMetrics:
         ...
 class VideoGenerationConfig:
     adapters: openvino_genai.py_openvino_genai.AdapterConfig | None
+    audio_guidance_rescale: float | None
+    audio_guidance_scale: float | None
     generator: Generator
     negative_prompt: str | None
     taylorseer_config: openvino_genai.py_openvino_genai.TaylorSeerCacheConfig | None
@@ -5917,6 +6079,9 @@ class VideoGenerationPerfMetrics(ImageGenerationPerfMetrics):
     def __init__(self) -> None:
         ...
 class VideoGenerationResult:
+    @property
+    def audio(self) -> openvino._pyopenvino.Tensor:
+        ...
     @property
     def perf_metrics(self) -> VideoGenerationPerfMetrics:
         ...

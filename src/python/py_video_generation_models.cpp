@@ -8,6 +8,10 @@
 #include <filesystem>
 
 #include "openvino/genai/video_generation/autoencoder_kl_ltx_video.hpp"
+#include "openvino/genai/video_generation/autoencoder_kl_ltx2_audio.hpp"
+#include "openvino/genai/video_generation/ltx2_text_connectors.hpp"
+#include "openvino/genai/video_generation/ltx2_video_transformer_3d_model.hpp"
+#include "openvino/genai/video_generation/ltx2_vocoder.hpp"
 #include "openvino/genai/video_generation/ltx_video_transformer_3d_model.hpp"
 #include "py_utils.hpp"
 
@@ -250,7 +254,161 @@ void init_autoencoder_kl_ltx_video(py::module_& m) {
             )");
 }
 
+void init_ltx2_video_transformer_3d_model(py::module_& m) {
+    auto transformer = py::class_<ov::genai::LTX2VideoTransformer3DModel>(
+        m, "LTX2VideoTransformer3DModel", "Joint video+audio diffusion transformer used by LTX2.")
+        .def(py::init([](const std::filesystem::path& root_dir) {
+                 return std::make_unique<ov::genai::LTX2VideoTransformer3DModel>(root_dir);
+             }),
+             py::arg("root_dir"))
+        .def(py::init([](const std::filesystem::path& root_dir, const std::string& device, const py::kwargs& kwargs) {
+                 return std::make_unique<ov::genai::LTX2VideoTransformer3DModel>(root_dir, device, pyutils::kwargs_to_any_map(kwargs));
+             }),
+             py::arg("root_dir"),
+             py::arg("device"));
+
+    py::class_<ov::genai::LTX2VideoTransformer3DModel::Output>(transformer, "Output")
+        .def_readonly("video", &ov::genai::LTX2VideoTransformer3DModel::Output::video)
+        .def_readonly("audio", &ov::genai::LTX2VideoTransformer3DModel::Output::audio);
+
+    py::class_<ov::genai::LTX2VideoTransformer3DModel::Config>(transformer, "Config", "Configuration for LTX2VideoTransformer3DModel.")
+        .def(py::init([](const std::filesystem::path& config_path) {
+                 return std::make_unique<ov::genai::LTX2VideoTransformer3DModel::Config>(config_path);
+             }),
+             py::arg("config_path"))
+        .def_readonly("in_channels", &ov::genai::LTX2VideoTransformer3DModel::Config::in_channels)
+        .def_readonly("patch_size", &ov::genai::LTX2VideoTransformer3DModel::Config::patch_size)
+        .def_readonly("patch_size_t", &ov::genai::LTX2VideoTransformer3DModel::Config::patch_size_t)
+        .def_readonly("audio_in_channels", &ov::genai::LTX2VideoTransformer3DModel::Config::audio_in_channels);
+
+    transformer.def("get_config", &ov::genai::LTX2VideoTransformer3DModel::get_config)
+        .def(
+            "compile",
+            [](ov::genai::LTX2VideoTransformer3DModel& self, const std::string& device, const py::kwargs& kwargs) {
+                auto properties = pyutils::kwargs_to_any_map(kwargs);
+                py::gil_scoped_release rel;
+                return self.compile(device, properties);
+            },
+            py::arg("device"))
+        .def("reshape", &ov::genai::LTX2VideoTransformer3DModel::reshape, py::arg("batch_size"))
+        .def("set_adapters", &ov::genai::LTX2VideoTransformer3DModel::set_adapters, py::arg("adapters"))
+        .def("get_expected_batch_size", &ov::genai::LTX2VideoTransformer3DModel::get_expected_batch_size)
+        .def("infer",
+             &ov::genai::LTX2VideoTransformer3DModel::infer,
+             py::call_guard<py::gil_scoped_release>(),
+             py::arg("hidden_states"),
+             py::arg("audio_hidden_states"),
+             py::arg("encoder_hidden_states"),
+             py::arg("audio_encoder_hidden_states"),
+             py::arg("timestep"),
+             py::arg("encoder_attention_mask"),
+             py::arg("audio_encoder_attention_mask"),
+             py::arg("num_frames"),
+             py::arg("height"),
+             py::arg("width"),
+             py::arg("fps"),
+             py::arg("audio_num_frames"),
+             py::arg("video_coords"),
+             py::arg("audio_coords"));
+}
+
+void init_autoencoder_kl_ltx2_audio(py::module_& m) {
+    auto vae = py::class_<ov::genai::AutoencoderKLLTX2Audio>(
+        m, "AutoencoderKLLTX2Audio", "LTX2 audio VAE decoder (mel-spectrogram decoder).")
+        .def(py::init([](const std::filesystem::path& vae_decoder_path) {
+                 return std::make_unique<ov::genai::AutoencoderKLLTX2Audio>(vae_decoder_path);
+             }),
+             py::arg("vae_decoder_path"))
+        .def(py::init([](const std::filesystem::path& vae_decoder_path, const std::string& device, const py::kwargs& kwargs) {
+                 return std::make_unique<ov::genai::AutoencoderKLLTX2Audio>(vae_decoder_path, device, pyutils::kwargs_to_any_map(kwargs));
+             }),
+             py::arg("vae_decoder_path"),
+             py::arg("device"));
+
+    py::class_<ov::genai::AutoencoderKLLTX2Audio::Config>(vae, "Config", "Configuration for AutoencoderKLLTX2Audio.")
+        .def_readonly("latent_channels", &ov::genai::AutoencoderKLLTX2Audio::Config::latent_channels)
+        .def_readonly("mel_bins", &ov::genai::AutoencoderKLLTX2Audio::Config::mel_bins)
+        .def_readonly("mel_compression_ratio", &ov::genai::AutoencoderKLLTX2Audio::Config::mel_compression_ratio)
+        .def_readonly("sample_rate", &ov::genai::AutoencoderKLLTX2Audio::Config::sample_rate);
+
+    vae.def("get_config", &ov::genai::AutoencoderKLLTX2Audio::get_config)
+        .def(
+            "compile",
+            [](ov::genai::AutoencoderKLLTX2Audio& self, const std::string& device, const py::kwargs& kwargs) {
+                auto properties = pyutils::kwargs_to_any_map(kwargs);
+                py::gil_scoped_release rel;
+                return self.compile(device, properties);
+            },
+            py::arg("device"))
+        .def("reshape", &ov::genai::AutoencoderKLLTX2Audio::reshape, py::arg("batch_size"))
+        .def("decode", &ov::genai::AutoencoderKLLTX2Audio::decode, py::call_guard<py::gil_scoped_release>(), py::arg("latent"));
+}
+
+void init_ltx2_text_connectors(py::module_& m) {
+    auto connectors = py::class_<ov::genai::LTX2TextConnectors>(
+        m, "LTX2TextConnectors", "Projects text encoder hidden states into video/audio conditioning embeddings.")
+        .def(py::init([](const std::filesystem::path& root_dir) {
+                 return std::make_unique<ov::genai::LTX2TextConnectors>(root_dir);
+             }),
+             py::arg("root_dir"))
+        .def(py::init([](const std::filesystem::path& root_dir, const std::string& device, const py::kwargs& kwargs) {
+                 return std::make_unique<ov::genai::LTX2TextConnectors>(root_dir, device, pyutils::kwargs_to_any_map(kwargs));
+             }),
+             py::arg("root_dir"),
+             py::arg("device"));
+
+    py::class_<ov::genai::LTX2TextConnectors::Output>(connectors, "Output")
+        .def_readonly("video_text_embedding", &ov::genai::LTX2TextConnectors::Output::video_text_embedding)
+        .def_readonly("audio_text_embedding", &ov::genai::LTX2TextConnectors::Output::audio_text_embedding)
+        .def_readonly("connector_attention_mask", &ov::genai::LTX2TextConnectors::Output::connector_attention_mask);
+
+    connectors.def(
+        "compile",
+        [](ov::genai::LTX2TextConnectors& self, const std::string& device, const py::kwargs& kwargs) {
+            auto properties = pyutils::kwargs_to_any_map(kwargs);
+            py::gil_scoped_release rel;
+            return self.compile(device, properties);
+        },
+        py::arg("device"))
+        .def("infer",
+             &ov::genai::LTX2TextConnectors::infer,
+             py::call_guard<py::gil_scoped_release>(),
+             py::arg("text_encoder_hidden_states"),
+             py::arg("attention_mask"));
+}
+
+void init_ltx2_vocoder(py::module_& m) {
+    auto vocoder = py::class_<ov::genai::LTX2Vocoder>(m, "LTX2Vocoder", "Converts a mel spectrogram into a raw audio waveform.")
+        .def(py::init([](const std::filesystem::path& root_dir) {
+                 return std::make_unique<ov::genai::LTX2Vocoder>(root_dir);
+             }),
+             py::arg("root_dir"))
+        .def(py::init([](const std::filesystem::path& root_dir, const std::string& device, const py::kwargs& kwargs) {
+                 return std::make_unique<ov::genai::LTX2Vocoder>(root_dir, device, pyutils::kwargs_to_any_map(kwargs));
+             }),
+             py::arg("root_dir"),
+             py::arg("device"));
+
+    py::class_<ov::genai::LTX2Vocoder::Config>(vocoder, "Config", "Configuration for LTX2Vocoder.")
+        .def_readonly("output_sampling_rate", &ov::genai::LTX2Vocoder::Config::output_sampling_rate);
+
+    vocoder.def("get_config", &ov::genai::LTX2Vocoder::get_config)
+        .def(
+            "compile",
+            [](ov::genai::LTX2Vocoder& self, const std::string& device, const py::kwargs& kwargs) {
+                auto properties = pyutils::kwargs_to_any_map(kwargs);
+                py::gil_scoped_release rel;
+                return self.compile(device, properties);
+            },
+            py::arg("device"))
+        .def("infer", &ov::genai::LTX2Vocoder::infer, py::call_guard<py::gil_scoped_release>(), py::arg("mel_spectrogram"));
+}
+
 void init_video_generation_models(py::module_& m) {
     init_ltx_video_transformer_3d_model(m);
     init_autoencoder_kl_ltx_video(m);
+    init_ltx2_video_transformer_3d_model(m);
+    init_autoencoder_kl_ltx2_audio(m);
+    init_ltx2_text_connectors(m);
+    init_ltx2_vocoder(m);
 }
