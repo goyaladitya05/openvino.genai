@@ -80,6 +80,9 @@ public:
 
     void set_adapters(const std::optional<AdapterConfig>& adapters);
 
+    /// @brief Runs inference. 'timestep' is a per-batch rank-1 [B] tensor; it is adapted internally
+    /// to the compiled model's schema (legacy rank-1 'timestep', or rank-2 [B, S] per-token
+    /// 'timestep' plus a rank-1 'audio_timestep' for current exports).
     Output infer(const ov::Tensor& hidden_states,
                 const ov::Tensor& audio_hidden_states,
                 const ov::Tensor& encoder_hidden_states,
@@ -106,6 +109,8 @@ private:
     ov::InferRequest m_request;
     std::shared_ptr<ov::Model> m_model;
     size_t m_expected_batch_size = 0;
+    size_t m_timestep_rank = 1;
+    bool m_has_audio_timestep = false;
 };
 
 }  // namespace ov::genai

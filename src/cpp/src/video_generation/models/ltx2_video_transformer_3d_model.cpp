@@ -3,6 +3,7 @@
 
 #include "openvino/genai/video_generation/ltx2_video_transformer_3d_model.hpp"
 
+#include <algorithm>
 #include <fstream>
 #include <set>
 
@@ -95,6 +96,17 @@ LTX2VideoTransformer3DModel& LTX2VideoTransformer3DModel::compile(const std::str
     m_request = compiled_model.create_infer_request();
     const auto& input_shape = compiled_model.input("hidden_states").get_partial_shape();
     m_expected_batch_size = input_shape.is_static() ? input_shape[0].get_length() : 0;
+    for (const auto& input : compiled_model.inputs()) {
+        const std::string& name = input.get_any_name();
+        if (name == "timestep") {
+            const auto rank = input.get_partial_shape().rank().get_length();
+            OPENVINO_ASSERT(rank == 1 || rank == 2,
+                            "LTX2 transformer expects a rank-1 or rank-2 'timestep' input, got rank ", rank);
+            m_timestep_rank = rank;
+        } else if (name == "audio_timestep") {
+            m_has_audio_timestep = true;
+        }
+    }
     // release the original model
     m_model.reset();
 
@@ -145,7 +157,26 @@ LTX2VideoTransformer3DModel::Output LTX2VideoTransformer3DModel::infer(const ov:
     m_request.set_tensor("audio_hidden_states", audio_hidden_states);
     m_request.set_tensor("encoder_hidden_states", encoder_hidden_states);
     m_request.set_tensor("audio_encoder_hidden_states", audio_encoder_hidden_states);
-    m_request.set_tensor("timestep", timestep);
+    OPENVINO_ASSERT(timestep.get_shape().size() == 1,
+                    "'timestep' must be a rank-1 [B] per-batch tensor, got rank ", timestep.get_shape().size());
+    if (m_timestep_rank == 2) {
+        // Current exports take a per-token [B, S] video timestep (uniform per batch row for
+        // text-to-video; image-to-video would zero the conditioning-frame tokens).
+        const size_t batch = timestep.get_shape()[0];
+        const size_t seq_len = hidden_states.get_shape()[1];
+        ov::Tensor video_timestep(ov::element::f32, {batch, seq_len});
+        float* video_timestep_data = video_timestep.data<float>();
+        const float* timestep_data = timestep.data<const float>();
+        for (size_t b = 0; b < batch; ++b) {
+            std::fill_n(video_timestep_data + b * seq_len, seq_len, timestep_data[b]);
+        }
+        m_request.set_tensor("timestep", video_timestep);
+    } else {
+        m_request.set_tensor("timestep", timestep);
+    }
+    if (m_has_audio_timestep) {
+        m_request.set_tensor("audio_timestep", timestep);
+    }
     m_request.set_tensor("encoder_attention_mask", encoder_attention_mask);
     m_request.set_tensor("audio_encoder_attention_mask", audio_encoder_attention_mask);
     m_request.set_tensor("num_frames", make_scalar_i64(num_frames));
