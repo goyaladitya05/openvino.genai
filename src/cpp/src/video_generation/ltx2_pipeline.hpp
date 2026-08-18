@@ -375,8 +375,7 @@ public:
         OPENVINO_ASSERT(width > 0 && width % m_vae_spatial_compression_ratio == 0,
                         "Width must be positive and divisible by ", m_vae_spatial_compression_ratio);
 
-        // The reshape API has no audio_guidance_scale parameter; take it from the stored
-        // generation config so audio-only CFG (guidance_scale <= 1, audio > 1) is expressible.
+        // The reshape API has no audio parameter; take audio_guidance_scale from the stored config.
         const float audio_guidance_scale = m_generation_config.audio_guidance_scale.value_or(guidance_scale);
         const size_t batch_size_multiplier = do_classifier_free_guidance(guidance_scale, audio_guidance_scale) ? 2 : 1;
         m_reshape_batch_size_multiplier = batch_size_multiplier;
@@ -402,8 +401,6 @@ public:
 
         const float guidance_scale = config.guidance_scale;
         const float guidance_rescale = config.guidance_rescale.value_or(0.0f);
-        // nullopt falls back to guidance_scale (diffusers' 'audio_guidance_scale or guidance_scale');
-        // unlike Python, an explicitly set 0.0 is honored.
         const float audio_guidance_scale = config.audio_guidance_scale.value_or(guidance_scale);
         const float audio_guidance_rescale = config.audio_guidance_rescale.value_or(guidance_rescale);
 
@@ -449,8 +446,7 @@ public:
         const size_t latent_mel_bins = num_mel_bins / mel_compression_ratio;
         const size_t audio_latent_channels = m_audio_vae->get_config().latent_channels;
 
-        // Derive audio duration from the effective decoded frame count so audio stays in
-        // sync with video when num_frames is floored to the temporal grid.
+        // Use the effective decoded frame count so audio duration stays in sync with video.
         const int64_t effective_num_frames = (latent_num_frames - 1) * m_vae_temporal_compression_ratio + 1;
         if (static_cast<size_t>(effective_num_frames) != config.num_frames) {
             GENAI_WARN("num_frames should satisfy (num_frames - 1) % " +
@@ -490,8 +486,7 @@ public:
         ov::Tensor audio_text_embedding = numpy_utils::repeat(connector_output.audio_text_embedding, B);
         ov::Tensor connector_attention_mask = numpy_utils::repeat(connector_output.connector_attention_mask, B);
 
-        // The transformer's video-side mask input is i64 (matches connector_attention_mask's own
-        // element type), but the audio-side mask input is f32 - convert once, outside the loop.
+        // The transformer's video-side mask input is i64, but the audio-side mask input is f32.
         ov::Tensor audio_encoder_attention_mask = i64_to_f32(connector_attention_mask);
 
         // 2. Prepare video and audio latents
@@ -530,8 +525,7 @@ public:
         }
 
         // 5. Denoising loop
-        // x0-space scratch is only needed when a guidance rescale is requested (rescale operates
-        // in x0 space; plain CFG is applied directly on velocities, which is algebraically equal).
+        // x0 scratch is only needed for rescale; plain CFG on velocities is algebraically identical.
         const size_t x0_scratch_size = (use_cfg && (guidance_rescale > 0.0f || audio_guidance_rescale > 0.0f))
                                            ? std::max(latents.get_size(), audio_latents.get_size())
                                            : 0;

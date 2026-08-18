@@ -162,8 +162,7 @@ LTX2VideoTransformer3DModel::Output LTX2VideoTransformer3DModel::infer(const ov:
     OPENVINO_ASSERT(timestep.get_shape().size() == 1,
                     "'timestep' must be a rank-1 [B] per-batch tensor, got rank ", timestep.get_shape().size());
     if (m_timestep_rank == 2) {
-        // Current exports take a per-token [B, S] video timestep (uniform per batch row for
-        // text-to-video; image-to-video would zero the conditioning-frame tokens).
+        // Current exports take a per-token [B, S] video timestep; uniform fill is text-to-video only.
         const size_t batch = timestep.get_shape()[0];
         const size_t seq_len = hidden_states.get_shape()[1];
         ov::Tensor video_timestep(ov::element::f32, {batch, seq_len});

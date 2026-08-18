@@ -180,8 +180,7 @@ ov::Tensor Gemma3TextEncoderModel::infer(const std::string& pos_prompt,
     ov::Tensor result(ov::element::f32, {batch_size, seq_len, hidden_size * num_layers});
     float* result_data = result.data<float>();
 
-    // Iterate tokens outermost and layers innermost so the destination is written sequentially
-    // exactly once (the layer-outermost order re-traverses the whole result once per layer).
+    // Tokens outermost so the destination is written sequentially exactly once.
     std::vector<const float*> layer_data(num_layers);
     for (size_t l = 0; l < num_layers; ++l) {
         layer_data[l] = m_request.get_tensor(m_hidden_state_output_names[l]).data<float>();
