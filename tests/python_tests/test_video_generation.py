@@ -655,13 +655,12 @@ class TestLTX2Text2VideoPipeline:
         assert result.video is not None
         assert result.audio is not None
 
-        video = np.array(result.video)
-        assert video.shape == (1, 9, 32, 32, 3)
+        assert result.video.data.shape == (1, 9, 32, 32, 3)
         # Audio is [num_videos_per_prompt, num_channels, num_samples]
-        audio = np.array(result.audio)
-        assert audio.shape[0] == 1
-        assert audio.shape[1] == 2
-        assert audio.shape[2] > 0
+        audio_shape = result.audio.data.shape
+        assert audio_shape[0] == 1
+        assert audio_shape[1] == 2
+        assert audio_shape[2] > 0
 
     def test_generate_without_cfg(self, ltx2_video_generation_model):
         pipe = ov_genai.Text2VideoPipeline(ltx2_video_generation_model, "CPU")
@@ -687,8 +686,8 @@ class TestLTX2Text2VideoPipeline:
         pipe = ov_genai.Text2VideoPipeline(ltx2_video_generation_model, "CPU")
         result1 = pipe.generate("a fox", **self.GENERATE_KWARGS, generator=ov_genai.CppStdGenerator(42))
         result2 = pipe.generate("a fox", **self.GENERATE_KWARGS, generator=ov_genai.CppStdGenerator(42))
-        np.testing.assert_array_equal(np.array(result1.video), np.array(result2.video))
-        np.testing.assert_array_equal(np.array(result1.audio), np.array(result2.audio))
+        np.testing.assert_array_equal(result1.video.data, result2.video.data)
+        np.testing.assert_array_equal(result1.audio.data, result2.audio.data)
 
     def test_generate_with_callback(self, ltx2_video_generation_model):
         pipe = ov_genai.Text2VideoPipeline(ltx2_video_generation_model, "CPU")
