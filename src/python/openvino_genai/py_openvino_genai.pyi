@@ -6014,6 +6014,8 @@ class VLMRawPerfMetrics:
         ...
 class VideoGenerationConfig:
     adapters: openvino_genai.py_openvino_genai.AdapterConfig | None
+    audio_guidance_rescale: float | None
+    audio_guidance_scale: float | None
     generator: Generator
     negative_prompt: str | None
     taylorseer_config: openvino_genai.py_openvino_genai.TaylorSeerCacheConfig | None
