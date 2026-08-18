@@ -94,8 +94,10 @@ LTX2VideoTransformer3DModel& LTX2VideoTransformer3DModel::compile(const std::str
     ov::CompiledModel compiled_model = utils::singleton_core().compile_model(m_model, device, *filtered_properties);
     ov::genai::utils::print_compiled_model_properties(compiled_model, "LTX2 Video Transformer 3D model");
     m_request = compiled_model.create_infer_request();
+    // reshape() leaves non-batch dims dynamic, so check only the batch dim's staticness.
     const auto& input_shape = compiled_model.input("hidden_states").get_partial_shape();
-    m_expected_batch_size = input_shape.is_static() ? input_shape[0].get_length() : 0;
+    m_expected_batch_size =
+        (input_shape.rank().is_static() && input_shape[0].is_static()) ? input_shape[0].get_length() : 0;
     for (const auto& input : compiled_model.inputs()) {
         const std::string& name = input.get_any_name();
         if (name == "timestep") {

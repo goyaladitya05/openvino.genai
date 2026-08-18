@@ -74,7 +74,12 @@ ov::Tensor AutoencoderKLLTX2Audio::decode(const ov::Tensor& latent) {
 
     m_decoder_request.set_tensor("latent_sample", latent);
     m_decoder_request.infer();
-    return m_decoder_request.get_output_tensor();
+    // Copy to an owned tensor - get_output_tensor() aliases the infer request's
+    // internal buffer, which would be overwritten on the next decode() call.
+    ov::Tensor output = m_decoder_request.get_output_tensor();
+    ov::Tensor mel_spectrogram(output.get_element_type(), output.get_shape());
+    output.copy_to(mel_spectrogram);
+    return mel_spectrogram;
 }
 
 const AutoencoderKLLTX2Audio::Config& AutoencoderKLLTX2Audio::get_config() const {

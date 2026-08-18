@@ -54,9 +54,16 @@ LTX2TextConnectors::Output LTX2TextConnectors::infer(const ov::Tensor& text_enco
     m_request.set_tensor("attention_mask", attention_mask);
     m_request.infer();
 
+    // Copy to owned tensors - get_tensor() aliases the infer request's internal
+    // buffers, which would be overwritten on the next infer() call.
+    auto copy_owned = [](const ov::Tensor& t) {
+        ov::Tensor owned(t.get_element_type(), t.get_shape());
+        t.copy_to(owned);
+        return owned;
+    };
     Output output;
-    output.video_text_embedding = m_request.get_tensor("video_text_embedding");
-    output.audio_text_embedding = m_request.get_tensor("audio_text_embedding");
-    output.connector_attention_mask = m_request.get_tensor("connector_attention_mask");
+    output.video_text_embedding = copy_owned(m_request.get_tensor("video_text_embedding"));
+    output.audio_text_embedding = copy_owned(m_request.get_tensor("audio_text_embedding"));
+    output.connector_attention_mask = copy_owned(m_request.get_tensor("connector_attention_mask"));
     return output;
 }

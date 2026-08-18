@@ -264,7 +264,6 @@ class LTX2Pipeline : public VideoPipeline {
     int32_t m_num_train_timesteps = 1000;
     size_t m_max_image_seq_len = 4096;
     int64_t m_vae_spatial_compression_ratio = 32, m_vae_temporal_compression_ratio = 8;
-    size_t m_audio_vae_temporal_compression_ratio = 4;
 
     bool do_classifier_free_guidance(float guidance_scale, float audio_guidance_scale) const {
         return guidance_scale > 1.0f || audio_guidance_scale > 1.0f;
@@ -293,6 +292,10 @@ class LTX2Pipeline : public VideoPipeline {
         OPENVINO_ASSERT(config.width > 0 && config.width % m_vae_spatial_compression_ratio == 0,
                         "Width must be positive and divisible by ", m_vae_spatial_compression_ratio);
         OPENVINO_ASSERT(config.num_frames > 0, "num_frames must be positive");
+        if (config.frame_rate.has_value()) {
+            OPENVINO_ASSERT(std::isfinite(*config.frame_rate) && *config.frame_rate > 0.0f,
+                            "frame_rate must be a positive finite value, got ", *config.frame_rate);
+        }
     }
 
 public:
@@ -380,7 +383,10 @@ public:
         OPENVINO_ASSERT(width > 0 && width % m_vae_spatial_compression_ratio == 0,
                         "Width must be positive and divisible by ", m_vae_spatial_compression_ratio);
 
-        const size_t batch_size_multiplier = do_classifier_free_guidance(guidance_scale, guidance_scale) ? 2 : 1;
+        // The reshape API has no audio_guidance_scale parameter; take it from the stored
+        // generation config so audio-only CFG (guidance_scale <= 1, audio > 1) is expressible.
+        const float audio_guidance_scale = m_generation_config.audio_guidance_scale.value_or(guidance_scale);
+        const size_t batch_size_multiplier = do_classifier_free_guidance(guidance_scale, audio_guidance_scale) ? 2 : 1;
         m_reshape_batch_size_multiplier = batch_size_multiplier;
         // VAEs, connectors and vocoder are left dynamic-shaped.
         m_text_encoder->reshape(static_cast<int>(batch_size_multiplier), static_cast<int>(m_generation_config.max_sequence_length));
@@ -404,10 +410,9 @@ public:
 
         const float guidance_scale = config.guidance_scale;
         const float guidance_rescale = config.guidance_rescale.value_or(0.0f);
-        // 'audio_guidance_scale or guidance_scale' fallback, matching diffusers' LTX2Pipeline.
-        const float audio_guidance_scale = config.audio_guidance_scale.value_or(0.0f) > 0.0f
-                                               ? *config.audio_guidance_scale
-                                               : guidance_scale;
+        // nullopt falls back to guidance_scale (diffusers' 'audio_guidance_scale or guidance_scale');
+        // unlike Python, an explicitly set 0.0 is honored.
+        const float audio_guidance_scale = config.audio_guidance_scale.value_or(guidance_scale);
         const float audio_guidance_rescale = config.audio_guidance_rescale.value_or(guidance_rescale);
 
         const bool use_cfg = do_classifier_free_guidance(guidance_scale, audio_guidance_scale);
@@ -452,10 +457,19 @@ public:
         const size_t latent_mel_bins = num_mel_bins / mel_compression_ratio;
         const size_t audio_latent_channels = m_audio_vae->get_config().latent_channels;
 
-        const float duration_s = static_cast<float>(config.num_frames) / frame_rate;
+        // Derive audio duration from the effective decoded frame count so audio stays in
+        // sync with video when num_frames is floored to the temporal grid.
+        const int64_t effective_num_frames = (latent_num_frames - 1) * m_vae_temporal_compression_ratio + 1;
+        if (static_cast<size_t>(effective_num_frames) != config.num_frames) {
+            GENAI_WARN("num_frames should satisfy (num_frames - 1) % " +
+                       std::to_string(m_vae_temporal_compression_ratio) + " == 0; generating " +
+                       std::to_string(effective_num_frames) + " frames instead of " +
+                       std::to_string(config.num_frames));
+        }
+        const float duration_s = static_cast<float>(effective_num_frames) / frame_rate;
         const float audio_latents_per_second = static_cast<float>(t_config.audio_sampling_rate) /
                                                static_cast<float>(t_config.audio_hop_length) /
-                                               static_cast<float>(m_audio_vae_temporal_compression_ratio);
+                                               static_cast<float>(m_audio_vae->get_config().temporal_compression_ratio);
         const size_t audio_num_frames = static_cast<size_t>(std::lround(duration_s * audio_latents_per_second));
 
         // 1. Text encoding + connectors

@@ -67,5 +67,10 @@ ov::Tensor LTX2Vocoder::infer(const ov::Tensor& mel_spectrogram) {
 
     m_request.set_tensor("hidden_states", mel_spectrogram);
     m_request.infer();
-    return m_request.get_output_tensor();
+    // Copy to an owned tensor - get_output_tensor() aliases the infer request's
+    // internal buffer, which would be overwritten on the next infer() call.
+    ov::Tensor output = m_request.get_output_tensor();
+    ov::Tensor waveform(output.get_element_type(), output.get_shape());
+    output.copy_to(waveform);
+    return waveform;
 }

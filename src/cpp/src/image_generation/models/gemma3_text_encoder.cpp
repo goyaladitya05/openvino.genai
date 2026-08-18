@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstring>
 #include <regex>
+#include <type_traits>
 
 #include "lora/helper.hpp"
 #include "utils.hpp"
@@ -129,15 +130,33 @@ ov::Tensor Gemma3TextEncoderModel::infer(const std::string& pos_prompt,
         ov::Tensor input_ids_token = tokenizer_output.input_ids;
         ov::Tensor attention_mask_token = tokenizer_output.attention_mask;
         const size_t token_len = std::min(seq_len, input_ids_token.get_shape()[1]);
+        const int64_t* src_ids = input_ids_token.data<int64_t>();
+        const int64_t* src_mask = attention_mask_token.data<int64_t>();
 
-        int64_t* ids_row = input_ids.data<int64_t>() + batch_idx * seq_len;
-        int64_t* mask_row = attention_mask.data<int64_t>() + batch_idx * seq_len;
-        int64_t* out_mask_row = m_prompt_attention_mask.data<int64_t>() + batch_idx * seq_len;
-        std::fill_n(ids_row, seq_len, static_cast<int64_t>(pad_token_id));
-        std::fill_n(mask_row, seq_len, static_cast<int64_t>(0));
-        std::copy_n(input_ids_token.data<int64_t>(), token_len, ids_row);
-        std::copy_n(attention_mask_token.data<int64_t>(), token_len, mask_row);
-        std::copy_n(attention_mask_token.data<int64_t>(), token_len, out_mask_row);
+        auto fill_rows = [&](auto* ids_data, auto* mask_data, auto* out_mask_data) {
+            using T = std::remove_pointer_t<decltype(ids_data)>;
+            auto* ids_row = ids_data + batch_idx * seq_len;
+            auto* mask_row = mask_data + batch_idx * seq_len;
+            auto* out_mask_row = out_mask_data + batch_idx * seq_len;
+            std::fill_n(ids_row, seq_len, static_cast<T>(pad_token_id));
+            std::fill_n(mask_row, seq_len, T{0});
+            std::fill_n(out_mask_row, seq_len, T{0});
+            for (size_t i = 0; i < token_len; ++i) {
+                ids_row[i] = static_cast<T>(src_ids[i]);
+                mask_row[i] = static_cast<T>(src_mask[i]);
+                out_mask_row[i] = static_cast<T>(src_mask[i]);
+            }
+        };
+
+        if (input_ids.get_element_type() == ov::element::i32) {
+            fill_rows(input_ids.data<int32_t>(),
+                      attention_mask.data<int32_t>(),
+                      m_prompt_attention_mask.data<int32_t>());
+        } else {
+            fill_rows(input_ids.data<int64_t>(),
+                      attention_mask.data<int64_t>(),
+                      m_prompt_attention_mask.data<int64_t>());
+        }
     };
 
     size_t current_batch_idx = 0;
