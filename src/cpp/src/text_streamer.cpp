@@ -144,12 +144,14 @@ TextParserStreamerImpl(std::vector<std::shared_ptr<IncrementalParser>> parsers) 
 
 };
 
-TextParserStreamer::TextParserStreamer(const Tokenizer& tokenizer, std::vector<std::shared_ptr<IncrementalParser>> parsers) 
-    : TextStreamer(tokenizer, [this](std::string s) -> CallbackTypeVariant {
-                return this->write(s);
-    }), m_pimpl{std::make_unique<TextParserStreamerImpl>(parsers)} {
-        m_pimpl->m_parsed_message["content"] = "";
-    }
+TextParserStreamer::TextParserStreamer(const Tokenizer& tokenizer, std::vector<std::shared_ptr<IncrementalParser>> parsers) :
+        TextStreamer(tokenizer, [this](std::string s) -> CallbackTypeVariant
+        {
+    return this->write(s);
+        }), m_pimpl{std::make_unique<TextParserStreamerImpl>( parsers )}
+{
+            m_pimpl->m_parsed_message["content"]="";
+}
 
 CallbackTypeVariant TextParserStreamer::write(std::string delta_text) {
     // When 'write' is called with string, it means new chunk of tokens is decoded into text
@@ -168,11 +170,11 @@ CallbackTypeVariant TextParserStreamer::write(std::string delta_text) {
         // delta_tokens = m_tokens_cache[4..end]
 
         // Find where the last printed tokens are located based on m_printed_len and print_until
-        auto print_until = m_decoded_lengths[m_decoded_lengths.size() - delay_n_tokens];
-        auto first = std::upper_bound(m_decoded_lengths.begin(), m_decoded_lengths.end(), static_cast<long long>(m_printed_len))
-                     - m_decoded_lengths.begin();
-        auto last  = std::upper_bound(m_decoded_lengths.begin(), m_decoded_lengths.end(), static_cast<long long>(print_until))
-                     - m_decoded_lengths.begin();
+        auto print_until=m_decoded_lengths[m_decoded_lengths.size() - delay_n_tokens];
+        auto first = std::upper_bound(m_decoded_lengths.begin(), m_decoded_lengths.end(), static_cast<long long>(m_printed_len) )
+            -m_decoded_lengths.begin();
+        auto last  =std::upper_bound(m_decoded_lengths.begin(), m_decoded_lengths.end(), static_cast<long long>(print_until))
+                     - m_decoded_lengths.begin( );
         
         // Before calling base write from TextStreamer save the current token.
         if (last >= first) {

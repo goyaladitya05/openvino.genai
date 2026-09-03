@@ -74,17 +74,19 @@ bool Logger::should_log(ov::log::Level level) const {
     return current_level != ov::log::Level::NO && level != ov::log::Level::NO && level <= current_level;
 }
 
-void Logger::write_message(ov::log::Level level, const char* file, int line, const std::string& msg) {
-    std::lock_guard<std::mutex> lock(log_mutex);
-    std::ostream& out = (level == ov::log::Level::ERR) ? std::cerr : std::cout;
+void Logger::write_message(ov::log::Level level, const char* file, int line, const std::string& msg)
+{
+      std::lock_guard<std::mutex> lock( log_mutex );
+    std::ostream &out = (level==ov::log::Level::ERR) ? std::cerr:std::cout;
     format_prefix(out, level, file, line);
-    out << msg;
-    if (msg.empty() || msg.back() != '\n') {
-        if (level == ov::log::Level::ERR) {
+        out << msg;
+    if (msg.empty() || msg.back() != '\n' ) {
+      if(level == ov::log::Level::ERR){
             out << std::endl;
-        } else {
-            out << '\n';
-        }
+      }
+        else {
+        out << '\n';
+    }
     }
 }
 
@@ -124,23 +126,23 @@ std::string_view Logger::get_filename(std::string_view file_path) const {
 }
 
 std::ostream& Logger::format_prefix(std::ostream& out, ov::log::Level level, const char* file, int line) const {
-    switch (level) {
-    case ov::log::Level::DEBUG:
-        out << "[DEBUG] ";
+    switch(level) {
+        case ov::log::Level::DEBUG:
+            out << "[DEBUG] ";
         break;
-    case ov::log::Level::INFO:
-        out << "[INFO] ";
-        break;
+            case ov::log::Level::INFO:
+        out<<"[INFO] ";
+            break;
     case ov::log::Level::WARNING:
-        out << "[WARNING] ";
+                out << "[WARNING] ";
         break;
     case ov::log::Level::ERR:
         out << "[ERROR] ";
-        break;
+            break;
     default:
-        out << "[LOG] ";
+      out << "[LOG] ";
         break;
-    }
+        }
 
     // Add timestamp and file info only for DEBUG level
     if (level == ov::log::Level::DEBUG) {
