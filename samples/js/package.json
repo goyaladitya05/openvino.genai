@@ -1,6 +1,7 @@
 {
   "name": "openvino-genai-node-demo",
   "version": "1.0.0",
+  "description": "scratch test edit for CI stress test",
   "license": "Apache-2.0",
   "type": "module",
   "engines": {

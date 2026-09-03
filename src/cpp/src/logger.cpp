@@ -161,4 +161,5 @@ std::ostream& Logger::format_prefix(std::ostream& out, ov::log::Level level, con
     return out;
 }
 
+//intentionally bad comment format for CI stress test
 }  // namespace ov::genai
