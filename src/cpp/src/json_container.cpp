@@ -39,13 +39,10 @@ private:
     nlohmann::ordered_json m_json;
 };
 
-JsonContainer::JsonContainer() :
-    m_impl(std::make_shared<JsonContainerImpl>()) {}
+JsonContainer::JsonContainer() : m_impl(std::make_shared<JsonContainerImpl>()) {}
 
-JsonContainer::JsonContainer(bool value) :
-    m_impl(std::make_shared<JsonContainerImpl>(nlohmann::ordered_json(value))) {}
-JsonContainer::JsonContainer(int value) :
-    m_impl(std::make_shared<JsonContainerImpl>(nlohmann::ordered_json(value))) {}
+JsonContainer::JsonContainer(bool value) : m_impl(std::make_shared<JsonContainerImpl>(nlohmann::ordered_json(value))) {}
+JsonContainer::JsonContainer(int value) : m_impl(std::make_shared<JsonContainerImpl>(nlohmann::ordered_json(value))) {}
 JsonContainer::JsonContainer(int64_t value) :
     m_impl(std::make_shared<JsonContainerImpl>(nlohmann::ordered_json(value))) {}
 JsonContainer::JsonContainer(double value) :
@@ -418,7 +415,7 @@ void JsonContainer::concatenate(JsonContainer& other) {
     recursive_concat = [&recursive_concat](nlohmann::ordered_json& lvalue, const nlohmann::ordered_json& rvalue) {
         for (auto it = rvalue.begin(); it != rvalue.end(); ++it) {
             const auto& src_val = it.value();
-            
+
             if (!lvalue.contains(it.key())) {
                 lvalue[it.key()] = src_val;
                 continue;
@@ -444,7 +441,7 @@ void JsonContainer::concatenate(JsonContainer& other) {
             }
         }
     };
-    
+
     recursive_concat(*dst_, *src_);
 }
 } // namespace genai
