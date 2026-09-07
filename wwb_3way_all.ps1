@@ -2,20 +2,20 @@
 #   1. LTX-Video text-to-video
 #   2. LTX-Video text-to-video + LoRA   (2-way: HF vs GenAI -- Optimum rejects adapters)
 #   3. LTX-Video image-to-video
-#   4. LTX-2     text-to-video          (HF leg runs in bf16 via WWB_HF_DTYPE; fp32 needs ~190 GB)
+#   4. LTX-2     text-to-video          (opt-in via -Modes ...,ltx2; everything runs fp32)
 #
 # Usage (PowerShell, from the repo root on branch ltx2-wwb-full):
-#   .\wwb_3way_all.ps1                       # setup + all four runs
+#   .\wwb_3way_all.ps1                       # setup + runs 1-3
 #   .\wwb_3way_all.ps1 -Clean                # wipe previous outputs in $WorkDir first
 #   .\wwb_3way_all.ps1 -SkipSetup            # reuse existing build/env
 #   .\wwb_3way_all.ps1 -Modes t2v,i2v        # subset
 # Run it, then DISCONNECT the RDP session (do not sign out). Everything is logged to $WorkDir\run.log.
 
 param(
-    [string[]]$Modes = @("t2v", "lora", "i2v", "ltx2"),
+    [string[]]$Modes = @("t2v", "lora", "i2v"),   # add "ltx2" to include LTX-2 (HF leg is fp32: ~190 GB resident)
     [switch]$SkipSetup,
     [switch]$Clean,
-    [string]$Ltx2HfDtype = "bfloat16",
+    [string]$Ltx2HfDtype = "float32",
     [int]$NumSamples = 10
 )
 
@@ -89,9 +89,10 @@ if (($Modes -contains "i2v") -and -not (Test-Path "$Ltx1Ov\vae_encoder")) {
 Write-Host "modes: $($Modes -join ', ')   samples: $NumSamples   ltx2 HF dtype: $Ltx2HfDtype"
 
 # Runs one comparison leg; output goes to the transcript.
-function Leg($title, [string[]]$args) {
+# NB: the parameter must not be named $args -- that is a PowerShell automatic variable and splats empty.
+function Leg($title, [string[]]$wwbArgs) {
     Step $title
-    & python $Wwb @args
+    & python $Wwb @wwbArgs
     if ($LASTEXITCODE -ne 0) { Write-Host "!!! $title FAILED (exit $LASTEXITCODE)" -ForegroundColor Red }
 }
 
