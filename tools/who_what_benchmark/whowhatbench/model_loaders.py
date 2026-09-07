@@ -906,10 +906,12 @@ def load_text2video_model(model_id, device="CPU", ov_config=None, use_hf=False, 
         from diffusers import DiffusionPipeline
 
         logger.info("Using HF Transformers API")
+        # WWB_HF_DTYPE lets large models (e.g. LTX-2) load in bf16 where fp32 does not fit in RAM
+        torch_dtype = getattr(torch, os.environ.get("WWB_HF_DTYPE", "float32"))
         try:
-            model = DiffusionPipeline.from_pretrained(model_id, torch_dtype=torch.float32)
+            model = DiffusionPipeline.from_pretrained(model_id, torch_dtype=torch_dtype)
         except ValueError:
-            model = DiffusionPipeline.from_pretrained(model_id, trust_remote_code=True, torch_dtype=torch.float32)
+            model = DiffusionPipeline.from_pretrained(model_id, trust_remote_code=True, torch_dtype=torch_dtype)
         if kwargs.get("adapters") is not None:
             adapters = kwargs["adapters"]
             alphas = kwargs.get("alphas", None)
