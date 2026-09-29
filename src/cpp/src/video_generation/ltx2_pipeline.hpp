@@ -17,6 +17,7 @@
 #include "image_generation/threaded_callback.hpp"
 #include "logger.hpp"
 #include "lora/helper.hpp"
+#include "lora/names_mapping.hpp"
 #include "generation_config_utils.hpp"
 #include "openvino/genai/image_generation/gemma3_text_encoder.hpp"
 #include "openvino/genai/video_generation/autoencoder_kl_ltx2_audio.hpp"
@@ -139,7 +140,6 @@ class LTX2Pipeline : public VideoPipeline {
                         "Gemma3's 'max_sequence_length' must be less or equal to 1024");
         OPENVINO_ASSERT(!generation_config.taylorseer_config,
                         "TaylorSeer is not supported for LTX2 pipelines");
-        OPENVINO_ASSERT(!generation_config.adapters, "LoRA adapters are not supported for LTX2 pipelines");
     }
 
     size_t audio_num_frames_for(const VideoGenerationConfig& generation_config) const {
@@ -486,6 +486,15 @@ public:
         check_inputs(merged_generation_config);
         OPENVINO_ASSERT(merged_generation_config.generator, "Generator must not be null");
 
+        std::optional<AdapterConfig> adapters = merged_generation_config.adapters;
+        if (adapters) {
+            if (auto normalized = derived_adapters(*adapters)) {
+                adapters = normalized;
+            }
+        }
+        m_connectors->set_adapters(adapters);
+        m_transformer->set_adapters(adapters);
+
         const float guidance_rescale = *merged_generation_config.guidance_rescale;
 
         std::shared_ptr<ThreadedCallbackWrapper> callback_ptr = nullptr;
@@ -753,13 +762,12 @@ public:
                  const std::string& denoise_device,
                  const std::string& vae_device,
                  const ov::AnyMap& properties) override {
-        std::optional<AdapterConfig> adapters;
-        auto filtered_properties = extract_adapters_from_properties(properties, &adapters);
-        OPENVINO_ASSERT(!adapters || adapters->get_adapters().empty(),
-                        "LoRA adapters are not supported for LTX2 pipelines");
+        update_adapters_from_properties(properties, m_generation_config.adapters);
+        auto updated_properties = update_adapters_in_properties(properties, &LTX2Pipeline::derived_adapters);
+        auto filtered_properties = extract_adapters_from_properties(properties);
         m_text_encoder->compile(text_encode_device, *filtered_properties);
-        m_connectors->compile(text_encode_device, *filtered_properties);
-        m_transformer->compile(denoise_device, *filtered_properties);
+        m_connectors->compile(text_encode_device, *updated_properties);
+        m_transformer->compile(denoise_device, *updated_properties);
         m_vae->compile(vae_device, *filtered_properties);
         m_audio_vae->compile(vae_device, *filtered_properties);
         m_vocoder->compile(vae_device, *filtered_properties);
@@ -769,6 +777,10 @@ public:
 
     void compile(const std::string& device, const ov::AnyMap& properties) override {
         compile(device, device, device, properties);
+    }
+
+    static std::optional<AdapterConfig> derived_adapters(const AdapterConfig& adapters) {
+        return ov::genai::derived_adapters(adapters, ltx2_adapter_normalization);
     }
 
 protected:

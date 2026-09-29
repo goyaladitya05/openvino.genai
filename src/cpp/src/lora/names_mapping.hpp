@@ -45,6 +45,8 @@ Adapter flux_adapter_normalization(const Adapter& adapter);
 
 Adapter diffusers_adapter_normalization(const Adapter& adapter);
 
+Adapter ltx2_adapter_normalization(const Adapter& adapter);
+
 std::string detect_lora_prefix(const AdapterConfig& adapters);
 
 }

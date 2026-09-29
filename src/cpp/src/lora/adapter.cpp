@@ -1019,6 +1019,67 @@ LoRATensors diffusers_normalization (const LoRATensors& tensors) {
     }
 }
 
+bool starts_with(const std::string& str, const std::string& prefix) {
+    return str.rfind(prefix, 0) == 0;
+}
+
+void replace_all(std::string& str, const std::string& from, const std::string& to) {
+    for (size_t pos = str.find(from); pos != std::string::npos; pos = str.find(from, pos + to.size())) {
+        str.replace(pos, from.size(), to);
+    }
+}
+
+// Port of diffusers _convert_non_diffusers_ltx2_lora_to_diffusers: original LTX-2 checkpoints name the transformer
+// 'diffusion_model' and the connectors 'text_embedding_projection', with pre-diffusers module names
+LoRATensors ltx2_normalization(const LoRATensors& tensors) {
+    const std::string transformer_prefix = "diffusion_model.";
+    const std::string connectors_prefix = "text_embedding_projection.";
+    const bool is_original_format = std::any_of(tensors.begin(), tensors.end(), [&](const auto& kv) {
+        return starts_with(kv.first, transformer_prefix) || starts_with(kv.first, connectors_prefix);
+    });
+    if (!is_original_format) {
+        return tensors;
+    }
+
+    static const std::vector<std::pair<std::string, std::string>> transformer_renames = {
+        {"patchify_proj", "proj_in"},
+        {"audio_patchify_proj", "audio_proj_in"},
+        {"av_ca_video_scale_shift_adaln_single", "av_cross_attn_video_scale_shift"},
+        {"av_ca_a2v_gate_adaln_single", "av_cross_attn_video_a2v_gate"},
+        {"av_ca_audio_scale_shift_adaln_single", "av_cross_attn_audio_scale_shift"},
+        {"av_ca_v2a_gate_adaln_single", "av_cross_attn_audio_v2a_gate"},
+        {"scale_shift_table_a2v_ca_video", "video_a2v_cross_attn_scale_shift_table"},
+        {"scale_shift_table_a2v_ca_audio", "audio_a2v_cross_attn_scale_shift_table"},
+        {"q_norm", "norm_q"},
+        {"k_norm", "norm_k"},
+        {"audio_prompt_adaln_single", "audio_prompt_adaln"},
+        {"prompt_adaln_single", "prompt_adaln"},
+    };
+
+    LoRATensors new_tensors;
+    for (const auto& kv : tensors) {
+        std::string key = kv.first;
+        if (starts_with(key, transformer_prefix)) {
+            key = key.substr(transformer_prefix.size());
+            for (const auto& [from, to] : transformer_renames) {
+                replace_all(key, from, to);
+            }
+            if (starts_with(key, "adaln_single.")) {
+                key = "time_embed." + key.substr(std::string("adaln_single.").size());
+            } else if (starts_with(key, "audio_adaln_single.")) {
+                key = "audio_time_embed." + key.substr(std::string("audio_adaln_single.").size());
+            }
+            key = "transformer." + key;
+        } else if (starts_with(key, connectors_prefix)) {
+            key = key.substr(connectors_prefix.size());
+            replace_all(key, "aggregate_embed", "text_proj_in");
+            key = "connectors." + key;
+        }
+        new_tensors[key] = kv.second;
+    }
+    return new_tensors;
+}
+
 } // namespace
 
 
@@ -1251,6 +1312,15 @@ Adapter flux_adapter_normalization(const Adapter& adapter) {
         return adapter; // it is already derived adapter, skipping
     }
     return Adapter(std::make_shared<FluxDerivedAdapter>(origin, flux_normalization));
+}
+
+Adapter ltx2_adapter_normalization(const Adapter& adapter) {
+    auto origin = adapter.m_pimpl;
+    using LTX2DerivedAdapter = DerivedAdapterImpl<decltype(&ltx2_normalization)>;
+    if (std::dynamic_pointer_cast<LTX2DerivedAdapter>(origin)) {
+        return adapter;  // it is already derived adapter, skipping
+    }
+    return Adapter(std::make_shared<LTX2DerivedAdapter>(origin, ltx2_normalization));
 }
 
 

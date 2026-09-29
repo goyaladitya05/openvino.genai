@@ -3,6 +3,7 @@
 
 #include "openvino/genai/video_generation/ltx2_text_connectors.hpp"
 
+#include "lora/helper.hpp"
 #include "utils.hpp"
 #include "video_generation/video_generation_utils.hpp"
 
@@ -52,12 +53,25 @@ LTX2TextConnectors& LTX2TextConnectors::reshape(const int batch_size) {
 
 LTX2TextConnectors& LTX2TextConnectors::compile(const std::string& device, const ov::AnyMap& properties) {
     OPENVINO_ASSERT(m_model, "Model has been already compiled. Cannot re-compile already compiled model");
-    ov::CompiledModel compiled_model = utils::singleton_core().compile_model(m_model, device, properties);
+    std::optional<AdapterConfig> adapters;
+    auto filtered_properties = extract_adapters_from_properties(properties, &adapters);
+    if (adapters) {
+        adapters->set_tensor_name_prefix(adapters->get_tensor_name_prefix().value_or("connectors"));
+        m_adapter_controller = AdapterController(m_model, *adapters, device);
+    }
+    ov::CompiledModel compiled_model = utils::singleton_core().compile_model(m_model, device, *filtered_properties);
     ov::genai::utils::print_compiled_model_properties(compiled_model, "LTX2 text connectors model");
     m_request = compiled_model.create_infer_request();
     m_model.reset();
 
     return *this;
+}
+
+void LTX2TextConnectors::set_adapters(const std::optional<AdapterConfig>& adapters) {
+    OPENVINO_ASSERT(m_request, "Connectors model must be compiled first");
+    if (adapters) {
+        m_adapter_controller.apply(m_request, *adapters);
+    }
 }
 
 LTX2TextConnectors::Output LTX2TextConnectors::infer(const ov::Tensor& text_encoder_hidden_states,

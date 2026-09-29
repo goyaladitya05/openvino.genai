@@ -13,6 +13,7 @@ import openvino_genai as ov_genai
 from utils.constants import get_ov_cache_converted_models_dir
 from utils.atomic_download import AtomicDownloadManager
 from utils.network import retry_request
+from utils.ltx2_lora import make_ltx2_lora
 
 logger = logging.getLogger(__name__)
 
@@ -519,13 +520,28 @@ class TestTaylorSeer:
         pipe = ov_genai.Text2VideoPipeline(video_generation_model, "CPU")
         assert pipe.get_generation_config().taylorseer_config is None
 
+
+@pytest.fixture(scope="module")
+def ltx2_lora_files(tmp_path_factory):
+    def make(model_dir):
+        directory = tmp_path_factory.mktemp("ltx2_lora")
+        return (
+            make_ltx2_lora(model_dir, directory / "diffusers_format.safetensors", original_format=False),
+            make_ltx2_lora(model_dir, directory / "original_format.safetensors", original_format=True),
+        )
+
+    return make
+
+
 class TestLoRAVideoGeneration:
+    @pytest.mark.parametrize("video_generation_model", [LTX_VIDEO_MODEL_ID, LTX2_MODEL_ID], indirect=True)
     def test_lora_adapters_constructor(self, video_generation_model):
         """Test that LoRA adapters can be passed to the constructor without error"""
         adapter_config = ov_genai.AdapterConfig()
         pipe = ov_genai.Text2VideoPipeline(video_generation_model, "CPU", adapters=adapter_config)
         assert pipe is not None
 
+    @pytest.mark.parametrize("video_generation_model", [LTX_VIDEO_MODEL_ID, LTX2_MODEL_ID], indirect=True)
     def test_lora_adapters_generate(self, video_generation_model):
         """Test that LoRA adapters can be passed to generate() without error"""
         adapter_config = ov_genai.AdapterConfig()
@@ -537,6 +553,7 @@ class TestLoRAVideoGeneration:
         assert result is not None
         assert result.video is not None
 
+    @pytest.mark.parametrize("video_generation_model", [LTX_VIDEO_MODEL_ID, LTX2_MODEL_ID], indirect=True)
     def test_lora_adapters_default_from_constructor(self, video_generation_model):
         """Test that LoRA adapters passed to the constructor are used by default in generate()"""
         adapter_config = ov_genai.AdapterConfig()
@@ -561,6 +578,65 @@ class TestLoRAVideoGeneration:
         assert hasattr(model, "set_adapters")
 
         model.set_adapters(None)
+
+    @pytest.mark.parametrize("video_generation_model", [LTX2_MODEL_ID], indirect=True)
+    def test_ltx2_models_have_set_adapters_method(self, video_generation_model):
+        transformer = ov_genai.LTX2VideoTransformer3DModel(str(Path(video_generation_model) / "transformer"))
+        transformer.compile("CPU")
+        transformer.set_adapters(None)
+        connectors = ov_genai.LTX2TextConnectors(str(Path(video_generation_model) / "connectors"))
+        connectors.compile("CPU")
+        connectors.set_adapters(None)
+
+    @staticmethod
+    def _ltx2_generate(pipe, **kwargs):
+        result = pipe.generate("test prompt", generator=ov_genai.CppStdGenerator(42), **GEN_KWARGS, **kwargs)
+        return np.array(result.video.data), np.array(result.audio.data)
+
+    @pytest.mark.parametrize("video_generation_model", [LTX2_MODEL_ID], indirect=True)
+    def test_ltx2_lora_changes_output(self, video_generation_model, ltx2_lora_files, capfd):
+        lora_path, _ = ltx2_lora_files(video_generation_model)
+        adapter = ov_genai.Adapter(lora_path)
+        baseline = self._ltx2_generate(ov_genai.Text2VideoPipeline(video_generation_model, "CPU"))
+
+        pipe = ov_genai.Text2VideoPipeline(video_generation_model, "CPU", adapters=ov_genai.AdapterConfig(adapter))
+        with_lora = self._ltx2_generate(pipe)
+        disabled = self._ltx2_generate(pipe, adapters=ov_genai.AdapterConfig())
+        zero_alpha = self._ltx2_generate(pipe, adapters=ov_genai.AdapterConfig(adapter, 0.0))
+
+        assert not np.array_equal(with_lora[0], baseline[0])
+        assert not np.array_equal(with_lora[1], baseline[1])
+        for video, audio in (disabled, zero_alpha):
+            assert np.array_equal(video, baseline[0])
+            assert np.array_equal(audio, baseline[1])
+        assert "unused LoRA tensors" not in capfd.readouterr().err
+
+    @pytest.mark.parametrize("video_generation_model", [LTX2_MODEL_ID], indirect=True)
+    def test_ltx2_lora_key_formats_match(self, video_generation_model, ltx2_lora_files, capfd):
+        diffusers_path, original_path = ltx2_lora_files(video_generation_model)
+
+        def run(path):
+            config = ov_genai.AdapterConfig(ov_genai.Adapter(path))
+            return self._ltx2_generate(ov_genai.Text2VideoPipeline(video_generation_model, "CPU", adapters=config))
+
+        diffusers_result, original_result = run(diffusers_path), run(original_path)
+        assert np.array_equal(diffusers_result[0], original_result[0])
+        assert np.array_equal(diffusers_result[1], original_result[1])
+        assert "unused LoRA tensors" not in capfd.readouterr().err
+
+    @pytest.mark.parametrize("video_generation_model", [LTX2_MODEL_ID], indirect=True)
+    def test_ltx2_lora_after_reshape(self, video_generation_model, ltx2_lora_files):
+        lora_path, _ = ltx2_lora_files(video_generation_model)
+
+        def reshaped(**compile_kwargs):
+            pipe = ov_genai.Text2VideoPipeline(video_generation_model)
+            pipe.reshape(1, 9, 32, 32, 3.0)
+            pipe.compile("CPU", **compile_kwargs)
+            return self._ltx2_generate(pipe, guidance_scale=3.0)[0]
+
+        with_lora = reshaped(adapters=ov_genai.AdapterConfig(ov_genai.Adapter(lora_path)))
+        assert with_lora.shape == (1, 9, 32, 32, 3)
+        assert not np.array_equal(with_lora, reshaped())
 
 
 class TestImage2VideoPipeline:
@@ -649,14 +725,22 @@ class TestImage2VideoPipeline:
 
         assert not np.array_equal(run(self._make_image()), run(self._make_image()))
 
-    @pytest.mark.parametrize("video_generation_model", [LTX_VIDEO_MODEL_ID], indirect=True)
+    @pytest.mark.parametrize("video_generation_model", [LTX_VIDEO_MODEL_ID, LTX2_MODEL_ID], indirect=True)
     def test_lora_passthrough(self, video_generation_model):
         pipe = ov_genai.Image2VideoPipeline(video_generation_model, "CPU")
         result = pipe.generate(self._make_image(), "test prompt", adapters=ov_genai.AdapterConfig(), **GEN_KWARGS)
         assert result.video.shape == [1, 9, 32, 32, 3]
 
     @pytest.mark.parametrize("video_generation_model", [LTX2_MODEL_ID], indirect=True)
-    def test_lora_rejected(self, video_generation_model):
-        pipe = ov_genai.Image2VideoPipeline(video_generation_model, "CPU")
-        with pytest.raises(RuntimeError, match="LoRA"):
-            pipe.generate(self._make_image(), "test prompt", adapters=ov_genai.AdapterConfig(), **GEN_KWARGS)
+    def test_ltx2_lora_changes_output(self, video_generation_model, ltx2_lora_files):
+        _, original_path = ltx2_lora_files(video_generation_model)
+        image = self._make_image()
+
+        def run(pipe):
+            result = pipe.generate(image, "test prompt", generator=ov_genai.CppStdGenerator(42), **GEN_KWARGS)
+            return np.array(result.video.data)
+
+        config = ov_genai.AdapterConfig(ov_genai.Adapter(original_path))
+        baseline = run(ov_genai.Image2VideoPipeline(video_generation_model, "CPU"))
+        with_lora = run(ov_genai.Image2VideoPipeline(video_generation_model, "CPU", adapters=config))
+        assert not np.array_equal(baseline, with_lora)

@@ -10,6 +10,7 @@
 #include "openvino/runtime/infer_request.hpp"
 #include "openvino/runtime/properties.hpp"
 #include "openvino/runtime/tensor.hpp"
+#include "openvino/genai/lora_adapter.hpp"
 #include "openvino/genai/visibility.hpp"
 
 namespace ov::genai {
@@ -49,12 +50,15 @@ public:
 
     LTX2TextConnectors& reshape(int batch_size);
 
+    void set_adapters(const std::optional<AdapterConfig>& adapters);
+
     /// @brief Projects text encoder hidden states into per-modality embeddings for the transformer
     Output infer(const ov::Tensor& text_encoder_hidden_states, const ov::Tensor& attention_mask);
 
 private:
     std::shared_ptr<ov::Model> m_model;
     ov::InferRequest m_request;
+    AdapterController m_adapter_controller;
 };
 
 }  // namespace ov::genai

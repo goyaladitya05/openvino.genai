@@ -2962,6 +2962,13 @@ class LTX2TextConnectors:
                         Reshapes the model for a specific batch size.
                         batch_size (int): Batch size.
         """
+    def set_adapters(self, adapters: openvino_genai.py_openvino_genai.AdapterConfig | None) -> None:
+        """
+                        Sets LoRA adapters for the connectors model.
+                        adapters (AdapterConfig or None): Adapter configuration to apply.
+                        Passing None keeps currently configured adapters unchanged.
+                        Pass an empty AdapterConfig() to disable all adapters.
+        """
 class LTX2VideoTransformer3DModel:
     """
     LTX2VideoTransformer3DModel class for joint LTX2 video and audio denoising.
@@ -3043,6 +3050,13 @@ class LTX2VideoTransformer3DModel:
                         height (int): Video height.
                         width (int): Video width.
                         audio_num_frames (int): Number of audio latent frames.
+        """
+    def set_adapters(self, adapters: openvino_genai.py_openvino_genai.AdapterConfig | None) -> None:
+        """
+                        Sets LoRA adapters for the transformer model.
+                        adapters (AdapterConfig or None): Adapter configuration to apply.
+                        Passing None keeps currently configured adapters unchanged.
+                        Pass an empty AdapterConfig() to disable all adapters.
         """
     def set_hidden_states(self, tensor_name: str, tensor: openvino._pyopenvino.Tensor) -> None:
         """

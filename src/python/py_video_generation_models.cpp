@@ -347,6 +347,15 @@ void init_ltx2_video_transformer_3d_model(py::module_& m) {
                 tensor_name (str): Name of the tensor input.
                 tensor (ov.Tensor): Tensor to set.
             )")
+        .def("set_adapters",
+             &ov::genai::LTX2VideoTransformer3DModel::set_adapters,
+             py::arg("adapters"),
+             R"(
+                Sets LoRA adapters for the transformer model.
+                adapters (AdapterConfig or None): Adapter configuration to apply.
+                Passing None keeps currently configured adapters unchanged.
+                Pass an empty AdapterConfig() to disable all adapters.
+            )")
         .def("infer",
              [](ov::genai::LTX2VideoTransformer3DModel& self,
                 const ov::Tensor& video_latent,
@@ -608,6 +617,15 @@ void init_ltx2_text_connectors(py::module_& m) {
              R"(
                 Reshapes the model for a specific batch size.
                 batch_size (int): Batch size.
+            )")
+        .def("set_adapters",
+             &ov::genai::LTX2TextConnectors::set_adapters,
+             py::arg("adapters"),
+             R"(
+                Sets LoRA adapters for the connectors model.
+                adapters (AdapterConfig or None): Adapter configuration to apply.
+                Passing None keeps currently configured adapters unchanged.
+                Pass an empty AdapterConfig() to disable all adapters.
             )")
         .def("infer",
              [](ov::genai::LTX2TextConnectors& self,

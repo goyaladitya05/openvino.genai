@@ -111,9 +111,9 @@ install(TARGETS image2video
         EXCLUDE_FROM_ALL)
 
 # create LoRA sample executable
-add_executable(lora_text2video lora_text2video.cpp imwrite_video.cpp)
+add_executable(lora_text2video lora_text2video.cpp imwrite_video.cpp save_audio.cpp)
 
-target_include_directories(lora_text2video PRIVATE ${CMAKE_BINARY_DIR} "${CMAKE_CURRENT_SOURCE_DIR}/../image_generation/" "${CMAKE_CURRENT_SOURCE_DIR}/../../../src/cpp/src/")
+target_include_directories(lora_text2video PRIVATE ${CMAKE_BINARY_DIR} "${CMAKE_CURRENT_SOURCE_DIR}/../image_generation/" "${CMAKE_CURRENT_SOURCE_DIR}/../../../src/cpp/src/" "$<BUILD_INTERFACE:${dr_libs_SOURCE_DIR}>")
 ov_genai_link_opencv(lora_text2video core imgproc videoio imgcodecs)
 target_link_libraries(lora_text2video PRIVATE openvino::genai indicators::indicators)
 

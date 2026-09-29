@@ -11,6 +11,7 @@
 #include "openvino/runtime/infer_request.hpp"
 #include "openvino/runtime/properties.hpp"
 #include "openvino/runtime/tensor.hpp"
+#include "openvino/genai/lora_adapter.hpp"
 #include "openvino/genai/visibility.hpp"
 
 namespace ov::genai {
@@ -60,6 +61,8 @@ public:
 
     void set_hidden_states(const std::string& tensor_name, const ov::Tensor& tensor);
 
+    void set_adapters(const std::optional<AdapterConfig>& adapters);
+
     /// @brief Builds the 'timestep' input matching the compiled model and runs joint video + audio denoising.
     /// Legacy exports take a rank-1 [B] timestep, current ones a rank-2 [B, S] per-token timestep.
     /// @returns A pair of video and audio velocity predictions
@@ -92,6 +95,7 @@ private:
     size_t m_expected_batch_size = 0;
     size_t m_timestep_rank = 0;
     bool m_has_audio_timestep = false;
+    AdapterController m_adapter_controller;
 };
 
 }  // namespace ov::genai

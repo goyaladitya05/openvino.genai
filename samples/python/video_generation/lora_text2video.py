@@ -4,7 +4,7 @@
 
 import argparse
 import openvino_genai
-from video_utils import save_video
+from video_utils import save_audio, save_video
 
 
 def print_perf_metrics(perf_metrics):
@@ -54,12 +54,18 @@ def main():
         num_frames=num_frames,
         num_inference_steps=25,
         callback=callback,
+        frame_rate=frame_rate,
         guidance_scale=3,
     )
 
     print("Generating video with LoRA adapters applied, resulting video will be in lora_video.avi")
     output = pipe.generate(args.prompt, **generate_args)
     save_video("lora_video.avi", output.video, frame_rate)
+    # TODO: Combine audio and video into one file inside GenAI for LTX-2, so users don't need ffmpeg.
+    # Models that generate audio (LTX-2) return it as a separate track. To combine both into one file:
+    #   ffmpeg -i lora_video.avi -i lora_audio.wav lora_video.mp4
+    if output.audio_sample_rate:
+        save_audio("lora_audio.wav", output.audio, output.audio_sample_rate)
     print_perf_metrics(output.perf_metrics)
 
     print("Generating video without LoRA adapters applied, resulting video will be in baseline_video.avi")
@@ -70,6 +76,8 @@ def main():
         **generate_args,
     )
     save_video("baseline_video.avi", output.video, frame_rate)
+    if output.audio_sample_rate:
+        save_audio("baseline_audio.wav", output.audio, output.audio_sample_rate)
     print_perf_metrics(output.perf_metrics)
 
 

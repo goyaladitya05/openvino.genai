@@ -6,6 +6,7 @@
 
 #include "progress_bar.hpp"
 #include "imwrite_video.hpp"
+#include "save_audio.hpp"
 
 #include <openvino/genai/video_generation/text2video_pipeline.hpp>
 
@@ -52,10 +53,17 @@ int main(int32_t argc, char* argv[]) try {
         ov::genai::num_frames(num_frames),
         ov::genai::num_inference_steps(25),
         ov::genai::callback(progress_bar),
+        ov::genai::frame_rate(frame_rate),
         ov::genai::guidance_scale(3)
     );
 
     save_video("lora_video.avi", output.video, frame_rate);
+    // TODO: Combine audio and video into one file inside GenAI for LTX-2, so users don't need ffmpeg.
+    // Models that generate audio (LTX-2) return it as a separate track. To combine both into one file:
+    //   ffmpeg -i lora_video.avi -i lora_audio.wav lora_video.mp4
+    if (output.audio_sample_rate) {
+        save_audio("lora_audio.wav", output.audio, output.audio_sample_rate);
+    }
     print_perf_metrics(output.performance_stat);
 
     std::cout << "Generating video without LoRA adapters applied, resulting video will be in baseline_video.avi\n";
@@ -67,10 +75,14 @@ int main(int32_t argc, char* argv[]) try {
         ov::genai::num_frames(num_frames),
         ov::genai::num_inference_steps(25),
         ov::genai::callback(progress_bar),
+        ov::genai::frame_rate(frame_rate),
         ov::genai::guidance_scale(3)
     );
 
     save_video("baseline_video.avi", output.video, frame_rate);
+    if (output.audio_sample_rate) {
+        save_audio("baseline_audio.wav", output.audio, output.audio_sample_rate);
+    }
     print_perf_metrics(output.performance_stat);
 
     return EXIT_SUCCESS;

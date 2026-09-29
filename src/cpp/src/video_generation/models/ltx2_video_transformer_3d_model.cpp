@@ -9,6 +9,7 @@
 #include <numeric>
 
 #include "json_utils.hpp"
+#include "lora/helper.hpp"
 #include "utils.hpp"
 #include "video_generation/video_generation_utils.hpp"
 
@@ -81,7 +82,13 @@ const LTX2VideoTransformer3DModel::Config& LTX2VideoTransformer3DModel::get_conf
 LTX2VideoTransformer3DModel& LTX2VideoTransformer3DModel::compile(const std::string& device,
                                                                   const ov::AnyMap& properties) {
     OPENVINO_ASSERT(m_model, "Model has been already compiled. Cannot re-compile already compiled model");
-    ov::CompiledModel compiled_model = utils::singleton_core().compile_model(m_model, device, properties);
+    std::optional<AdapterConfig> adapters;
+    auto filtered_properties = extract_adapters_from_properties(properties, &adapters);
+    if (adapters) {
+        adapters->set_tensor_name_prefix(adapters->get_tensor_name_prefix().value_or("transformer"));
+        m_adapter_controller = AdapterController(m_model, *adapters, device);
+    }
+    ov::CompiledModel compiled_model = utils::singleton_core().compile_model(m_model, device, *filtered_properties);
     ov::genai::utils::print_compiled_model_properties(compiled_model, "LTX2 Video Transformer 3D model");
     m_request = compiled_model.create_infer_request();
     const auto& input_shape = compiled_model.input("hidden_states").get_partial_shape();
@@ -91,6 +98,13 @@ LTX2VideoTransformer3DModel& LTX2VideoTransformer3DModel::compile(const std::str
     m_model.reset();
 
     return *this;
+}
+
+void LTX2VideoTransformer3DModel::set_adapters(const std::optional<AdapterConfig>& adapters) {
+    OPENVINO_ASSERT(m_request, "Transformer model must be compiled first");
+    if (adapters) {
+        m_adapter_controller.apply(m_request, *adapters);
+    }
 }
 
 void LTX2VideoTransformer3DModel::set_hidden_states(const std::string& tensor_name, const ov::Tensor& tensor) {
